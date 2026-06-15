@@ -40,7 +40,7 @@ export default function NovaDrawer({
 }) {
   const [tab, setTab] = useState<"journal" | "ask">("journal");
   const [draft, setDraft] = useState("");
-  const scroller = useRef<HTMLDivElement | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
 
   // Auto-scroll chat to bottom when a new turn appears.
   useEffect(() => {
