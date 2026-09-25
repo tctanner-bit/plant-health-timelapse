@@ -98,6 +98,7 @@ export default function App() {
         camera={camera}
         roomName={rooms.find((r) => r.id.toLowerCase() === camera.roomId)?.name ?? "Unknown room"}
         onBack={() => { setCameraId(null); reload(); }}
+        onCameraChange={(c) => setCameras((list) => list?.map((x) => (x.id === c.id ? c : x)) ?? list)}
       />
     );
   }

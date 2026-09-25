@@ -21,34 +21,29 @@ const PALETTE = [
   "#d4537e", "#e24b4a", "#d85a30", "#5dcaa5", "#b4b2a9",
 ];
 
-// Metrics that matter most for plant health, in the order we pick defaults.
-const DEFAULT_METRICS = [0, 1, 8, 20, 6, 9, 3];
-
-export function toSensorMeta(sensors: Sensor[]): SensorMeta[] {
-  const sorted = [...sensors].sort(
-    (a, b) => a.metric - b.metric || a.name.localeCompare(b.name)
-  );
-  // Colors assigned on the full sorted list so they survive toggling.
-  return sorted.map((s, i) => ({
-    id: s.id.toLowerCase(),
-    label: s.name,
-    short: METRIC_LABELS[s.metric] ?? s.name,
-    metric: s.metric,
-    unit: "",
-    color: PALETTE[i % PALETTE.length],
-  }));
-}
-
-// One sensor per headline metric, up to five.
-export function defaultVisible(meta: SensorMeta[]): Set<string> {
-  const out = new Set<string>();
-  for (const m of DEFAULT_METRICS) {
-    const s = meta.find((x) => x.metric === m);
-    if (s) out.add(s.id);
-    if (out.size >= 5) break;
-  }
-  if (out.size === 0) meta.slice(0, 3).forEach((s) => out.add(s.id));
-  return out;
+// The camera's configured sensors, in the configured order, with their current
+// names and metrics from Growlink. Colors follow the configured order so they
+// stay put when sensors are toggled. Ids no longer in the room (removed in
+// Growlink) are dropped and returned separately so the UI can say so.
+export function configuredSensors(
+  roomSensors: Sensor[],
+  ids: string[]
+): { meta: SensorMeta[]; missing: string[] } {
+  const meta: SensorMeta[] = [];
+  const missing: string[] = [];
+  ids.forEach((id) => {
+    const s = roomSensors.find((x) => sameId(x.id, id));
+    if (!s) return void missing.push(id);
+    meta.push({
+      id: id.toLowerCase(),
+      label: s.name,
+      short: METRIC_LABELS[s.metric] ?? s.name,
+      metric: s.metric,
+      unit: "",
+      color: PALETTE[meta.length % PALETTE.length],
+    });
+  });
+  return { meta, missing };
 }
 
 // The chart response doesn't promise a sensor id per series, so match by id if

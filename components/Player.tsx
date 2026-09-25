@@ -1,15 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, listFrames, signFrames } from "../lib/api";
-import { getSensorChart, getSensors } from "../lib/growlink";
-import {
-  SensorMeta,
-  Series,
-  defaultVisible,
-  seriesFromChart,
-  toSensorMeta,
-} from "../lib/sensors";
+import { Camera, listFrames, signFrames, updateCamera } from "../lib/api";
+import { Sensor, Uom, getSensorChart, getSensors } from "../lib/growlink";
+import { SensorMeta, Series, configuredSensors, seriesFromChart } from "../lib/sensors";
+import { loadUom, saveUom } from "../lib/prefs";
+import DisplaySettings from "./DisplaySettings";
 import SensorReadouts from "./SensorReadouts";
 import SensorCharts from "./SensorCharts";
 import SensorToggles from "./SensorToggles";
@@ -28,12 +24,14 @@ export default function Player({
   camera,
   roomName,
   onBack,
+  onCameraChange,
 }: {
   apiKey: string;
   orgId: string;
   camera: Camera;
   roomName: string;
   onBack: () => void;
+  onCameraChange: (c: Camera) => void;
 }) {
   const [bounds, setBounds] = useState<{ first: number; last: number } | null | undefined>(undefined);
   const [range, setRange] = useState<[number, number] | null>(null);
@@ -44,9 +42,12 @@ export default function Player({
   const [fps, setFps] = useState(8);
   const [error, setError] = useState<string | null>(null);
 
-  const [sensors, setSensors] = useState<SensorMeta[]>([]);
+  const [roomSensors, setRoomSensors] = useState<Sensor[] | null>(null);
+  const [units, setUnits] = useState<Record<string, string>>({});
   const [visible, setVisible] = useState<Set<string>>(new Set());
   const [series, setSeries] = useState<Series | null>(null);
+  const [uom, setUom] = useState<Uom>(() => loadUom());
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [nights, setNights] = useState<[number, number][]>([]);
   const [sensorError, setSensorError] = useState<string | null>(null);
 
@@ -112,40 +113,61 @@ export default function Player({
       });
   }, [apiKey, orgId, camera.id, frames, index, urls]);
 
-  // 4. The room's sensors, from Growlink.
+  // 4. The camera room's sensors, from Growlink: names and metrics for the
+  //    configured ones, and the choices offered in settings.
   useEffect(() => {
     let dead = false;
+    setRoomSensors(null);
     getSensors(apiKey, camera.roomId)
-      .then((list) => {
-        if (dead) return;
-        const meta = toSensorMeta(list);
-        setSensors(meta);
-        setVisible(defaultVisible(meta));
-      })
+      .then((list) => !dead && setRoomSensors(list))
       .catch((e) => !dead && setSensorError(e.message));
     return () => { dead = true; };
   }, [apiKey, camera.roomId]);
 
-  // 5. Sensor history for visible sensors over the range.
+  // The camera's configured sensors, in configured order. No guessing: with
+  // nothing configured, nothing is shown and settings prompt for a choice.
+  const configKey = camera.sensors.join();
+  const { meta: baseSensors, missing } = useMemo(
+    () => configuredSensors(roomSensors ?? [], camera.sensors),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roomSensors, configKey]
+  );
+  const sensors: SensorMeta[] = useMemo(
+    () => baseSensors.map((s) => ({ ...s, unit: units[s.id] ?? "" })),
+    [baseSensors, units]
+  );
+
+  // Everything configured starts visible; toggles hide rows for this session.
   useEffect(() => {
-    if (!range || visible.size === 0) return setSeries(null);
-    const req = sensors.filter((s) => visible.has(s.id));
-    if (req.length === 0) return;
+    setVisible(new Set(baseSensors.map((s) => s.id)));
+  }, [baseSensors]);
+
+  // 5. Sensor history for visible sensors over the range, in the viewer's units.
+  useEffect(() => {
+    const req = baseSensors.filter((s) => visible.has(s.id));
+    if (!range || req.length === 0) return setSeries(null);
     let dead = false;
-    getSensorChart(apiKey, orgId, req.map((s) => s.id), range[0], range[1])
+    getSensorChart(apiKey, orgId, req.map((s) => s.id), range[0], range[1], uom)
       .then((chart) => {
         if (dead) return;
-        const { series, units } = seriesFromChart(chart, req);
-        setSeries(series);
-        setSensors((prev) => prev.map((s) => (units[s.id] !== undefined ? { ...s, unit: units[s.id] } : s)));
+        const got = seriesFromChart(chart, req);
+        setSeries(got.series);
+        setUnits((prev) => ({ ...prev, ...got.units }));
         setNights(nightsFrom(chart.dayNight, range[0], range[1]));
         setSensorError(null);
       })
       .catch((e) => !dead && setSensorError(e.message));
     return () => { dead = true; };
-    // sensors is intentionally omitted: unit updates above would refetch forever.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, orgId, range, visible, sensors.length]);
+  }, [apiKey, orgId, range, visible, baseSensors, uom]);
+
+  const saveSensors = async (ids: string[]) => {
+    onCameraChange(await updateCamera(apiKey, orgId, camera.id, { sensors: ids }));
+  };
+
+  const changeUom = (u: Uom) => {
+    setUom(u);
+    saveUom(u);
+  };
 
   useEffect(() => {
     if (!playing || !frames?.length) return;
@@ -202,6 +224,14 @@ export default function Player({
           {camera.lastFrameAt && ` · last frame ${new Date(camera.lastFrameAt).toLocaleString()}`}
         </div>
       </div>
+      <button
+        onClick={() => setSettingsOpen((o) => !o)}
+        style={btn}
+        aria-expanded={settingsOpen}
+        aria-label="Display settings"
+      >
+        ⚙ Settings
+      </button>
       <button onClick={() => setNovaOpen(true)} style={novaBtn} aria-label="Open Nova AI">
         <span aria-hidden style={{ marginRight: 8 }}>◆</span>
         Nova AI
@@ -212,9 +242,42 @@ export default function Player({
   const shell = (body: React.ReactNode) => (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
       {header}
+      {settingsOpen && (
+        <DisplaySettings
+          key={configKey}
+          roomName={roomName}
+          roomSensors={roomSensors}
+          selected={camera.sensors}
+          uom={uom}
+          onSaveSensors={saveSensors}
+          onUomChange={changeUom}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
       {body}
     </div>
   );
+
+  // Where readouts go when nothing is configured: ask, don't guess.
+  const sensorPrompt =
+    camera.sensors.length === 0 ? (
+      <div style={callout}>
+        <span style={{ flex: 1 }}>
+          Choose which sensors from <b>{roomName}</b> to show alongside this camera.
+        </span>
+        {!settingsOpen && (
+          <button style={btn} onClick={() => setSettingsOpen(true)}>Choose sensors</button>
+        )}
+      </div>
+    ) : missing.length > 0 && roomSensors ? (
+      <div style={{ ...callout, borderColor: "#5a4a1f" }}>
+        <span style={{ flex: 1 }}>
+          {missing.length === 1 ? "One configured sensor is" : `${missing.length} configured sensors are`} no
+          longer in {roomName} in Growlink.
+        </span>
+        {!settingsOpen && <button style={btn} onClick={() => setSettingsOpen(true)}>Review sensors</button>}
+      </div>
+    ) : null;
 
   if (error) return shell(<Note>Error: {error}</Note>);
   if (bounds === undefined) return shell(<Note>Loading…</Note>);
@@ -243,6 +306,7 @@ export default function Player({
       />
 
       <div style={{ marginBottom: 12 }}>
+        {sensorPrompt}
         <SensorReadouts sensors={sensors} series={series} t={tNow} visible={visible} />
       </div>
 
@@ -383,6 +447,20 @@ const btn: React.CSSProperties = {
   borderRadius: 6,
   padding: "6px 14px",
   cursor: "pointer",
+};
+
+const callout: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  padding: "10px 12px",
+  marginBottom: 8,
+  background: "#161616",
+  border: "1px solid #2a2a2a",
+  borderRadius: 8,
+  fontSize: 13,
+  color: "#bbb",
 };
 
 const novaBtn: React.CSSProperties = {
