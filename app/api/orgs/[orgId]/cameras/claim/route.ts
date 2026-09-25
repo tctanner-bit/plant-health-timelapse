@@ -25,7 +25,7 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
   const body = await req.json().catch(() => ({}));
   const code = typeof body.code === "string" ? normalizeClaimCode(body.code) : null;
   if (!code)
-    return NextResponse.json({ error: "Enter the 8-character code from the camera's sticker" }, { status: 400 });
+    return NextResponse.json({ error: "Enter the 8-character Growlink setup code (like 7K3M-Q9XW), not the camera's UID" }, { status: 400 });
   const name = body.name === undefined || body.name === "" ? "Canopy camera" : parseName(body.name);
   if (!name) return NextResponse.json({ error: "Name must be 1–80 characters" }, { status: 400 });
   if (!(await roomInOrg(ctx, body.roomId)))
@@ -48,7 +48,7 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
   if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });
   if (!data)
     return NextResponse.json(
-      { error: "That code doesn't match an unclaimed camera. Check the sticker, or contact Growlink support." },
+      { error: "That code doesn't match an unclaimed camera. Check the Growlink setup code, or contact Growlink support." },
       { status: 404 }
     );
 

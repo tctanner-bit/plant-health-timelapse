@@ -66,7 +66,7 @@ export default function CameraHome({
         <div style={{ padding: "48px 0", textAlign: "center", color: "#888", lineHeight: 1.6 }}>
           No cameras yet.
           <br />
-          Plug a Growlink camera into a PoE port, then choose <b>Add camera</b> and enter the code on its sticker.
+          Plug a Growlink camera into a PoE port, then choose <b>Add camera</b> and enter its Growlink setup code.
         </div>
       )}
 
@@ -218,10 +218,10 @@ function ClaimCamera({
     <form onSubmit={submit} style={{ background: "#161616", border: "1px solid #242424", borderRadius: 8, padding: 16, marginBottom: 20, display: "grid", gap: 10 }}>
       <div style={{ fontWeight: 500 }}>Add a camera</div>
       <div style={{ fontSize: 13, color: "#888" }}>
-        Plug the camera into a PoE port on a network with internet access, then enter the code printed on its sticker.
+        Plug the camera into a PoE port on a network with internet access, then enter its Growlink setup code: 8 characters like 7K3M-Q9XW, on the Growlink label or setup sheet. This is not the camera&apos;s 16-character UID.
       </div>
       <label style={labelStyle}>
-        Sticker code
+        Growlink setup code
         <input
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
