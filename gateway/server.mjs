@@ -72,15 +72,27 @@ async function checkToken(token) {
   throw new Error(`ingest unavailable (HTTP ${status})`);
 }
 
-// Slow down anyone guessing passwords from one address.
+// Slow down anyone guessing passwords. Every failed login waits before its
+// 530, and a public address with repeated failures is locked out for a while.
+//
+// Behind a TCP proxy (Fly) every client arrives from the proxy's private
+// address, so a per-IP lockout would lock out every camera at once. There
+// only the delay applies. Tokens are 160-bit and can't be guessed anyway;
+// the limits exist to stop anyone hammering ingest-frame.
+const FAIL_DELAY_MS = 2000;
 const failures = new Map(); // ip → [timestamps]
 
+const isPrivate = (ip = "") =>
+  /^(::ffff:)?(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || /^f[cd]/i.test(ip);
+
 function tooManyFailures(ip) {
+  if (isPrivate(ip)) return false;
   const recent = (failures.get(ip) ?? []).filter((t) => Date.now() - t < FAIL_WINDOW_MS);
   failures.set(ip, recent);
   return recent.length >= FAIL_LIMIT;
 }
 const noteFailure = (ip) => failures.set(ip, [...(failures.get(ip) ?? []), Date.now()]);
+const failSlowly = () => new Promise((r) => setTimeout(r, FAIL_DELAY_MS));
 
 // ------------------------------------------------------------------ filesystem
 
@@ -234,6 +246,7 @@ server.on("login", async ({ connection, password }, resolve, reject) => {
     if (!token.startsWith("phc_") || !(await checkToken(token))) {
       noteFailure(ip);
       log("login_failed", { ip });
+      await failSlowly();
       return reject(new Error("Invalid credentials"));
     }
     log("login", { cam: hint(token), ip, tls: connection.secure });
@@ -245,6 +258,8 @@ server.on("login", async ({ connection, password }, resolve, reject) => {
 });
 
 server.on("client-error", ({ context, error }) => {
+  // Fly's TCP health check connects and hangs up every 30s; that's not news.
+  if (context === "commandSocket" && /EPIPE|ECONNRESET/.test(error?.message ?? "")) return;
   log("client_error", { context, error: error?.message });
 });
 

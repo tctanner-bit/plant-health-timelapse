@@ -16,22 +16,35 @@ function and keeps nothing.
   frames but records that they're online.
 - **Revoked cameras** can't upload, even with a cached login, and are
   refused at the next login.
-- **Plain FTP is refused** (`REQUIRE_TLS=true`). More than 20 failed logins
-  from one IP within 10 minutes locks that IP out until the window passes.
+- **Plain FTP is refused** (`REQUIRE_TLS=true`). Every failed login waits 2
+  seconds before it's refused. Behind Fly's proxy, that delay is the only
+  limit. On a VM with real client IPs, an IP with more than 20 failed logins
+  in 10 minutes is also locked out until the window passes.
 
 The gateway holds no Supabase keys. If it's compromised, the most an attacker
 gets is the tokens of cameras that log in while they control it.
 
 ## Deploy (Fly.io)
 
+Live as `phc-ftp` (dedicated IPv4 `137.66.12.41`, region `iad`). To
+redeploy after changes:
+
 ```
 cd gateway
-fly launch --no-deploy --copy-config --name phc-ftp
-fly ips allocate-v4
-fly secrets set PASV_URL=<the IPv4 from the previous step>
-fly deploy
-fly scale count 1
+fly deploy --ha=false --remote-only
 ```
+
+First-time setup, for reference:
+
+```
+fly apps create phc-ftp
+fly ips allocate-v4 -a phc-ftp
+fly secrets set PASV_URL=<the IPv4> -a phc-ftp
+fly deploy --ha=false --remote-only
+```
+
+Right after a deploy, Fly warns that nothing is listening on port 30000.
+That's expected: passive ports open only for the length of an upload.
 
 - **Dedicated IPv4 (about $2/month):** raw TCP services need one.
 - **One machine:** a passive data connection has to reach the machine that
@@ -45,13 +58,19 @@ fly scale count 1
 
 ## Known caveat behind Fly's proxy
 
-`ftp-srv` accepts a passive data connection only if it comes from the same IP
-as the control connection. Behind Fly's TCP proxy, the gateway sees proxy
-addresses rather than the camera's, so that check becomes a no-op, or it can
-reject legitimate connections if the two connections arrive through different
-proxy hosts. If uploads fail with "Remote addresses do not match", or you
-want the check to actually protect uploads, run the same Docker image on any
-VM with a public IP. The data channel is TLS either way.
+Confirmed in testing on 2026-09-25: every connection reaches the gateway
+from Fly's proxy address (`172.16.x.x`), never the camera's real IP.
+
+- **Passive uploads work.** `ftp-srv` requires the data connection to come
+  from the same IP as the control connection. Both show the proxy address,
+  so the check passes. It also can't tell clients apart, so it adds no
+  protection here. The data channel is TLS either way.
+- **Per-IP lockout is off behind the proxy.** It would lock out every
+  camera at once. See the login delay above.
+- **Logs show the proxy IP** rather than the site's IP.
+
+If you need real client IPs (per-site lockout, per-site logs), run the same
+Docker image on any VM with a public IP.
 
 ## Run locally
 
