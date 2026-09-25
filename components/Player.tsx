@@ -160,13 +160,15 @@ export default function Player({
     return () => { dead = true; };
   }, [apiKey, orgId, range, visible, baseSensors, uom]);
 
-  const saveSensors = async (ids: string[]) => {
-    onCameraChange(await updateCamera(apiKey, orgId, camera.id, { sensors: ids }));
-  };
-
-  const changeUom = (u: Uom) => {
-    setUom(u);
-    saveUom(u);
+  // Settings apply on Save only. Sensors go to the server (shared); units stay
+  // in this browser. Units are applied after the server save succeeds, so a
+  // failed save changes nothing.
+  const saveSettings = async (ids: string[] | null, u: Uom | null) => {
+    if (ids) onCameraChange(await updateCamera(apiKey, orgId, camera.id, { sensors: ids }));
+    if (u) {
+      setUom(u);
+      saveUom(u);
+    }
   };
 
   useEffect(() => {
@@ -224,12 +226,7 @@ export default function Player({
           {camera.lastFrameAt && ` · last frame ${new Date(camera.lastFrameAt).toLocaleString()}`}
         </div>
       </div>
-      <button
-        onClick={() => setSettingsOpen((o) => !o)}
-        style={btn}
-        aria-expanded={settingsOpen}
-        aria-label="Display settings"
-      >
+      <button onClick={() => setSettingsOpen(true)} style={btn} aria-haspopup="dialog">
         ⚙ Settings
       </button>
       <button onClick={() => setNovaOpen(true)} style={novaBtn} aria-label="Open Nova AI">
@@ -244,13 +241,12 @@ export default function Player({
       {header}
       {settingsOpen && (
         <DisplaySettings
-          key={configKey}
+          cameraName={camera.name}
           roomName={roomName}
           roomSensors={roomSensors}
           selected={camera.sensors}
           uom={uom}
-          onSaveSensors={saveSensors}
-          onUomChange={changeUom}
+          onSave={saveSettings}
           onClose={() => setSettingsOpen(false)}
         />
       )}

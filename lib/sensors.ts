@@ -16,7 +16,7 @@ export type SensorMeta = {
 export type Reading = { t: number; v: number };
 export type Series = Record<string, Reading[]>;
 
-const PALETTE = [
+export const PALETTE = [
   "#ef9f27", "#378add", "#7f77dd", "#97c459", "#1d9e75",
   "#d4537e", "#e24b4a", "#d85a30", "#5dcaa5", "#b4b2a9",
 ];
