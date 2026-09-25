@@ -73,3 +73,9 @@ export const loadApiKey = () => {
 export const saveApiKey = (k: string | null) => {
   try { k ? sessionStorage.setItem(KEY, k) : sessionStorage.removeItem(KEY); } catch {}
 };
+
+export type LatestFrame = { id: number; ts: number; url: string };
+
+// Every camera's newest frame, signed, in one call. Used by the facility view.
+export const latestFrames = (key: string, orgId: string) =>
+  call<{ frames: Record<string, LatestFrame> }>(key, `/api/orgs/${orgId}/latest-frames`).then((r) => r.frames);

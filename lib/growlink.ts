@@ -119,6 +119,36 @@ export async function getSensorChart(
   return { series: data?.series ?? [], dayNight: data?.dayNight ?? [] };
 }
 
+export type LiveReading = {
+  sensorId: string;
+  metric: number;
+  unitOfMeasure: number;
+  value: number;
+  timestamp: string;
+  suffix?: string;
+};
+
+// Latest readings for many sensors at once. Growlink asks for one batched call
+// per poll, never one per sensor; sensors with no recent data are omitted.
+// Chunked so a large facility doesn't send one enormous request.
+export async function getLiveSensors(
+  key: string,
+  orgId: string,
+  sensorIds: string[],
+  uom?: Uom
+): Promise<LiveReading[]> {
+  const out: LiveReading[] = [];
+  for (let i = 0; i < sensorIds.length; i += 200) {
+    const data = await glFetch(key, `/api/v2/organization/${orgId}/sensors/data/live`, {
+      method: "POST",
+      body: { sensorIds: sensorIds.slice(i, i + 200) },
+      uom,
+    });
+    out.push(...unwrapList<LiveReading>(data, "sensorData"));
+  }
+  return out;
+}
+
 // SensorMetric enum (subset we label; anything else falls back to the sensor name).
 export const METRIC_LABELS: Record<number, string> = {
   0: "Temperature", 1: "Humidity", 2: "pH", 3: "CO₂", 4: "TDS", 6: "Light",

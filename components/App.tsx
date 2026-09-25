@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Camera, listCameras, loadApiKey, saveApiKey } from "../lib/api";
 import { Org, Room, getOrganizations, getRooms } from "../lib/growlink";
 import CameraHome from "./CameraHome";
+import FacilityView from "./FacilityView";
 import Player from "./Player";
 import { Brand, Centered } from "./ui";
 
-// Top-level flow: API key → organization → cameras (grouped by room) → player.
-// The selected org and camera live in the URL (?org=…&camera=…) so a Builder
-// page or a display cast can deep-link straight to one room's timelapse.
+// Top-level flow: API key → organization → home (Facility view or Cameras
+// management) → player. The org, home tab and camera live in the URL
+// (?org=…&view=…&camera=…) so a Builder page or a display cast can deep-link
+// straight to the facility view or one room's timelapse.
+
+type HomeView = "facility" | "cameras";
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string | null | undefined>(undefined);
@@ -19,11 +23,14 @@ export default function App() {
   const [cameras, setCameras] = useState<Camera[] | null>(null);
   const [cameraId, setCameraId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<HomeView>("facility");
+  const [claiming, setClaiming] = useState(false);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     setOrgId(q.get("org"));
     setCameraId(q.get("camera"));
+    if (q.get("view") === "cameras") setView("cameras");
     setApiKey(loadApiKey());
   }, []);
 
@@ -32,9 +39,10 @@ export default function App() {
     const q = new URLSearchParams(window.location.search);
     orgId ? q.set("org", orgId) : q.delete("org");
     cameraId ? q.set("camera", cameraId) : q.delete("camera");
+    view === "cameras" ? q.set("view", "cameras") : q.delete("view");
     const s = q.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
-  }, [apiKey, orgId, cameraId]);
+  }, [apiKey, orgId, cameraId, view]);
 
   useEffect(() => {
     if (!apiKey) return;
@@ -60,6 +68,15 @@ export default function App() {
       setError(e.message);
     }
   };
+
+  // Background refresh for the facility view: keeps status current without
+  // replacing the screen with an error if one poll fails.
+  const refreshCameras = useCallback(async () => {
+    if (!apiKey || !orgId) return;
+    try {
+      setCameras(await listCameras(apiKey, orgId));
+    } catch {}
+  }, [apiKey, orgId]);
 
   useEffect(() => {
     setRooms(null);
@@ -103,18 +120,54 @@ export default function App() {
     );
   }
 
+  const org = orgs.find((o) => o.id.toLowerCase() === orgId.toLowerCase());
   return (
-    <CameraHome
-      apiKey={apiKey}
-      orgs={orgs}
-      orgId={orgId}
-      onOrgChange={(id) => { setCameraId(null); setOrgId(id); }}
-      rooms={rooms}
-      cameras={cameras}
-      onCamerasChange={setCameras}
-      onOpen={(id) => setCameraId(id)}
-      onSignOut={signOut}
-    />
+    <div className={`page${view === "facility" ? " wide" : ""}`}>
+      <header className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", marginBottom: 24, gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <Brand />
+          <h1 className="title" style={{ marginTop: 10 }}>{org?.name ?? "Facility"}</h1>
+        </div>
+        {orgs.length > 1 && (
+          <select className="field" value={orgId} onChange={(e) => { setCameraId(null); setOrgId(e.target.value); }} style={{ width: "auto", minWidth: 200 }} aria-label="Organization">
+            {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        )}
+        <button className="btn accent" onClick={() => { setView("cameras"); setClaiming(true); }}>+ Add camera</button>
+        <button className="btn ghost" onClick={signOut}>Sign out</button>
+      </header>
+
+      <div role="tablist" className="tabs" style={{ padding: 0, marginBottom: 24 }}>
+        {(["facility", "cameras"] as HomeView[]).map((v) => (
+          <button key={v} role="tab" aria-selected={view === v} className="tab" onClick={() => setView(v)}>
+            {v === "facility" ? "Facility" : `Cameras · ${cameras.length}`}
+          </button>
+        ))}
+      </div>
+
+      {view === "facility" ? (
+        <FacilityView
+          apiKey={apiKey}
+          orgId={orgId}
+          rooms={rooms}
+          cameras={cameras}
+          onOpen={(id) => setCameraId(id)}
+          onRefreshCameras={refreshCameras}
+          onAddCamera={() => { setView("cameras"); setClaiming(true); }}
+        />
+      ) : (
+        <CameraHome
+          apiKey={apiKey}
+          orgId={orgId}
+          rooms={rooms}
+          cameras={cameras}
+          claiming={claiming}
+          onClaimingChange={setClaiming}
+          onCamerasChange={setCameras}
+          onOpen={(id) => setCameraId(id)}
+        />
+      )}
+    </div>
   );
 }
 

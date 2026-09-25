@@ -247,7 +247,7 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .switch.on::after { transform: translateX(20px); background: var(--ok); }
 
 .seg { display: flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.seg button { flex: 1; background: var(--field); color: var(--muted); border: none; border-right: 1px solid var(--line); padding: 10px 12px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.seg button { flex: 1; white-space: nowrap; background: var(--field); color: var(--muted); border: none; border-right: 1px solid var(--line); padding: 10px 12px; font-size: 13px; font-weight: 700; cursor: pointer; }
 .seg button:last-child { border-right: none; }
 .seg button[aria-pressed="true"] { background: var(--ok-tint); color: var(--ok); }
 
@@ -260,3 +260,28 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
   .viewer { grid-template-columns: minmax(0, 1fr); }
   .viewer .metrics { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); max-height: none; }
 }
+
+/* -------------------------------------------------------------- facility */
+/* Every camera's latest snapshot with live readings, sized for 12–40 rooms. */
+.facility { display: grid; grid-template-columns: repeat(auto-fill, minmax(264px, 1fr)); gap: 14px; }
+.room-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; transition: border-color 150ms ease; }
+.room-tile:hover { border-color: var(--line-hi); }
+.room-shot { position: relative; aspect-ratio: 16 / 9; background: #000; border: none; padding: 0; cursor: pointer; display: grid; place-items: center; color: var(--dim); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 600; }
+.room-shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.room-status { position: absolute; top: 10px; left: 10px; padding: 5px 9px; background: rgba(8, 11, 10, 0.78); border-radius: var(--radius); backdrop-filter: blur(6px); font-size: 10px; }
+.room-stamp { position: absolute; bottom: 10px; right: 10px; padding: 4px 8px; background: rgba(8, 11, 10, 0.78); border-radius: var(--radius); font-size: 12px; font-weight: 700; color: var(--text); backdrop-filter: blur(6px); }
+.room-body { padding: 12px 12px 14px; display: grid; gap: 10px; }
+.room-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; background: none; border: none; padding: 0; color: var(--text); font-size: 17px; font-weight: 800; letter-spacing: -0.01em; text-align: left; cursor: pointer; }
+.room-title:hover span:first-child { color: var(--ok); }
+.room-empty { background: none; border: 1px dashed var(--line-hi); border-radius: var(--radius); color: var(--muted); padding: 12px; font-size: 12px; text-align: center; cursor: pointer; }
+.readings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.reading { position: relative; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 8px 8px 11px; overflow: hidden; min-width: 0; }
+.reading::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--swatch, var(--ok)); }
+.reading-label { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reading-value { margin-top: 4px; font-size: 20px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; white-space: nowrap; }
+.reading-value small { font-size: 0.5em; font-weight: 600; color: var(--muted); margin-left: 0.15em; letter-spacing: 0; }
+.reading-sub { margin-top: 3px; font-size: 10px; color: var(--dim); }
+.reading.more { color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer; display: grid; place-items: center; }
+.reading.more::before { display: none; }
+/* The facility grid can use more of a wide screen than reading views. */
+.page.wide { max-width: 1760px; }

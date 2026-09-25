@@ -2,31 +2,30 @@
 
 import { useEffect, useState } from "react";
 import { Camera, claimCamera, listFrames, revokeCamera, signFrames, updateCamera } from "../lib/api";
-import { Org, Room, ROOM_TYPE_LABELS } from "../lib/growlink";
-import { Brand } from "./ui";
+import { Room, ROOM_TYPE_LABELS } from "../lib/growlink";
+import { ago, cameraStatus } from "../lib/status";
 
+// The Cameras tab: claim, rename, move and revoke cameras. The page header
+// (org, Add camera, Sign out) is shared with the Facility tab, in App.
 export default function CameraHome({
   apiKey,
-  orgs,
   orgId,
-  onOrgChange,
   rooms,
   cameras,
+  claiming,
+  onClaimingChange: setClaiming,
   onCamerasChange,
   onOpen,
-  onSignOut,
 }: {
   apiKey: string;
-  orgs: Org[];
   orgId: string;
-  onOrgChange: (id: string) => void;
   rooms: Room[];
   cameras: Camera[];
+  claiming: boolean;
+  onClaimingChange: (v: boolean) => void;
   onCamerasChange: (c: Camera[]) => void;
   onOpen: (cameraId: string) => void;
-  onSignOut: () => void;
 }) {
-  const [claiming, setClaiming] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
 
   const replace = (c: Camera) => onCamerasChange(cameras.map((x) => (x.id === c.id ? c : x)));
@@ -36,25 +35,9 @@ export default function CameraHome({
     .map((r) => ({ room: r, cams: cameras.filter((c) => c.roomId === r.id.toLowerCase()) }))
     .filter((g) => g.cams.length > 0);
   const orphans = cameras.filter((c) => !rooms.some((r) => r.id.toLowerCase() === c.roomId));
-  const org = orgs.find((o) => o.id.toLowerCase() === orgId.toLowerCase());
 
   return (
-    <div className="page">
-      <header className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", marginBottom: 28, gap: 16 }}>
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <Brand />
-          <h1 className="title" style={{ marginTop: 10 }}>Cameras</h1>
-          {orgs.length === 1 && <div className="subtitle">{org?.name}</div>}
-        </div>
-        {orgs.length > 1 && (
-          <select className="field" value={orgId} onChange={(e) => onOrgChange(e.target.value)} style={{ width: "auto", minWidth: 200 }} aria-label="Organization">
-            {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
-        )}
-        <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
-        <button className="btn ghost" onClick={onSignOut}>Sign out</button>
-      </header>
-
+    <div>
       {claiming && (
         <ClaimCamera
           rooms={rooms}
@@ -107,23 +90,6 @@ export default function CameraHome({
   );
 }
 
-function status(c: Camera): { label: string; tone: "ok" | "warn" | "alarm" | "idle" } {
-  if (c.revoked) return { label: "Revoked", tone: "idle" };
-  const seenAge = c.lastSeenAt ? Date.now() - new Date(c.lastSeenAt).getTime() : Infinity;
-  const online = seenAge <= c.intervalSec * 3 * 1000;
-  if (!c.lastFrameAt) return online ? { label: "First frame soon", tone: "warn" } : { label: "Waiting", tone: "warn" };
-  return online ? { label: "Capturing", tone: "ok" } : { label: "Offline", tone: "alarm" };
-}
-
-const ago = (iso: string | null) => {
-  if (!iso) return "never";
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 90) return `${s}s ago`;
-  if (s < 5400) return `${Math.round(s / 60)} min ago`;
-  if (s < 172800) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} days ago`;
-};
-
 // Latest frame as a thumbnail. One frames call and one signing call per card.
 function useLatestFrame(apiKey: string, orgId: string, c: Camera) {
   const [url, setUrl] = useState<string | null>(null);
@@ -164,7 +130,7 @@ function CameraCard({
   onSave: (p: { name: string; roomId: string }) => Promise<void>;
   onRevoke: () => Promise<void>;
 }) {
-  const st = status(c);
+  const st = cameraStatus(c);
   const thumb = useLatestFrame(apiKey, orgId, c);
   const [name, setName] = useState(c.name);
   const [roomId, setRoomId] = useState(c.roomId);

@@ -30,6 +30,37 @@ export const PALETTE = [
   "#5fd0c4", "#d6c24a", "#e36fa8", "#8fb4ff", "#b8c4bd",
 ];
 
+// Each measurement type keeps one color everywhere, so temperature reads the
+// same in every room tile, chart and legend. Extra rows of a type (averaging
+// off) take unused palette colors.
+const METRIC_COLOR: Record<number, string> = {
+  0: "#e8756a", // temperature
+  1: "#4f9fe8", // humidity
+  8: "#3fb984", // VPD
+  3: "#a47eff", // CO2
+  20: "#d6c24a", // PAR
+  6: "#d6c24a", // light
+  22: "#e0a33c", // DLI
+  9: "#5fd0c4", // water content
+  10: "#e36fa8", // EC
+  2: "#8fb4ff", // pH
+};
+
+function assignColors(rows: SensorMeta[]): SensorMeta[] {
+  const used = new Set<string>();
+  const out = rows.map((r) => {
+    const c = METRIC_COLOR[r.metric];
+    if (c && !used.has(c)) {
+      used.add(c);
+      return { ...r, color: c };
+    }
+    return { ...r, color: "" };
+  });
+  const spare = PALETTE.filter((c) => !used.has(c));
+  let i = 0;
+  return out.map((r) => (r.color ? r : { ...r, color: spare[i++ % spare.length] }));
+}
+
 // A member reading older than this doesn't count toward an average at time t
 // (the sensor has stopped reporting, rather than reporting on a coarser grid).
 const MAX_GAP_MS = 45 * 60 * 1000;
@@ -83,7 +114,7 @@ export function displayRows(sensors: SensorMeta[], average: boolean): SensorMeta
       rows.push({ ...s });
     }
   }
-  return rows.map((r, i) => ({ ...r, color: PALETTE[i % PALETTE.length] }));
+  return assignColors(rows);
 }
 
 // Row series from raw per-sensor series. An average is taken at every
