@@ -1,4 +1,6 @@
-# Plant Health Timelapse
+# Plant Health AI
+
+_See every change in your canopy, and why it happened._
 
 Timelapse of a grow room's canopy, synced with that room's Growlink sensor
 history. Multi-tenant: every Growlink organization sees only its own cameras.

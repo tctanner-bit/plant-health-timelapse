@@ -141,7 +141,7 @@ function KeyGate({ onKey }: { onKey: (k: string) => void }) {
   return (
     <Centered>
       <form onSubmit={submit} style={{ width: "min(420px, 100%)", padding: 16 }}>
-        <h1 style={{ fontSize: 18, fontWeight: 500, margin: "0 0 4px" }}>Plant Health Timelapse</h1>
+        <h1 style={{ fontSize: 18, fontWeight: 500, margin: "0 0 4px" }}>Plant Health AI</h1>
         <p style={{ fontSize: 13, color: "#888", margin: "0 0 16px" }}>
           Enter your Growlink API key (portal → Builder → Authentication). It stays in this browser tab
           and is forgotten when the tab closes.

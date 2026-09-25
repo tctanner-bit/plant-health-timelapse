@@ -40,7 +40,7 @@ export default function CameraHome({
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
-        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 500, flex: 1 }}>Plant Health Timelapse</h1>
+        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 500, flex: 1 }}>Plant Health AI</h1>
         {orgs.length > 1 && (
           <select value={orgId} onChange={(e) => onOrgChange(e.target.value)} style={inputStyle}>
             {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}

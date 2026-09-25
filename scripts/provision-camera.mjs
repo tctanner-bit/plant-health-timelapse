@@ -95,7 +95,7 @@ ${dryRun ? "DRY RUN — nothing was saved.\n" : ""}
 STICKER (for the customer)
   Growlink camera · Serial ${serial}
   Setup code: ${printedCode}
-  Plug into PoE, then add it in Plant Health Timelapse with this code.
+  Plug into PoE, then add it in Plant Health AI with this code.
 
 CAMERA SETTINGS (Reolink web UI → Settings)
   Network → Advanced → FTP

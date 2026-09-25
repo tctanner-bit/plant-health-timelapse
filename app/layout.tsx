@@ -1,4 +1,8 @@
-export const metadata = { title: "Plant Health Timelapse" };
+export const metadata = {
+  title: "Plant Health AI",
+  description:
+    "Time-lapse cameras paired with your Growlink sensor data. Watch the canopy change alongside temperature, humidity and VPD.",
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
