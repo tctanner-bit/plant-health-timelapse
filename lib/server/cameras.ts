@@ -6,7 +6,7 @@ import { getRooms, getSensors, sameId } from "../growlink";
 import type { OrgContext } from "./auth";
 
 export const CAMERA_COLUMNS =
-  "id, room_id, name, serial, interval_sec, token_hint, created_at, claimed_at, last_frame_at, last_seen_at, last_error, last_error_at, revoked_at, sensors";
+  "id, room_id, name, serial, interval_sec, token_hint, created_at, claimed_at, last_frame_at, last_seen_at, last_error, last_error_at, revoked_at, sensors, average_same_type";
 
 export type CameraRow = {
   id: string;
@@ -23,6 +23,7 @@ export type CameraRow = {
   last_error_at: string | null;
   revoked_at: string | null;
   sensors: string[]; // Growlink sensor ids in the camera's room, display order
+  average_same_type: boolean;
 };
 
 // Shape sent to the browser. Never includes the token hash.
@@ -41,6 +42,7 @@ export const toCamera = (r: CameraRow) => ({
   lastErrorAt: r.last_error_at,
   revoked: !!r.revoked_at,
   sensors: r.sensors ?? [],
+  averageSameType: r.average_same_type ?? true,
 });
 
 // Sticker claim codes: 8 Crockford base32 characters, printed as XXXX-XXXX.

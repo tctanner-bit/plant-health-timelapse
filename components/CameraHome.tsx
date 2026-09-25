@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { Camera, claimCamera, revokeCamera, updateCamera } from "../lib/api";
+import { useEffect, useState } from "react";
+import { Camera, claimCamera, listFrames, revokeCamera, signFrames, updateCamera } from "../lib/api";
 import { Org, Room, ROOM_TYPE_LABELS } from "../lib/growlink";
-import { btn, inputStyle } from "./ui";
+import { Brand } from "./ui";
 
 export default function CameraHome({
   apiKey,
@@ -36,19 +36,24 @@ export default function CameraHome({
     .map((r) => ({ room: r, cams: cameras.filter((c) => c.roomId === r.id.toLowerCase()) }))
     .filter((g) => g.cams.length > 0);
   const orphans = cameras.filter((c) => !rooms.some((r) => r.id.toLowerCase() === c.roomId));
+  const org = orgs.find((o) => o.id.toLowerCase() === orgId.toLowerCase());
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
-        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 500, flex: 1 }}>Plant Health AI</h1>
+    <div className="page">
+      <header className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", marginBottom: 28, gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <Brand />
+          <h1 className="title" style={{ marginTop: 10 }}>Cameras</h1>
+          {orgs.length === 1 && <div className="subtitle">{org?.name}</div>}
+        </div>
         {orgs.length > 1 && (
-          <select value={orgId} onChange={(e) => onOrgChange(e.target.value)} style={inputStyle}>
+          <select className="field" value={orgId} onChange={(e) => onOrgChange(e.target.value)} style={{ width: "auto", minWidth: 200 }} aria-label="Organization">
             {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
           </select>
         )}
-        <button style={btn} onClick={() => setClaiming(true)}>+ Add camera</button>
-        <button style={{ ...btn, color: "#888" }} onClick={onSignOut}>Sign out</button>
-      </div>
+        <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
+        <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+      </header>
 
       {claiming && (
         <ClaimCamera
@@ -63,22 +68,29 @@ export default function CameraHome({
       )}
 
       {cameras.length === 0 && !claiming && (
-        <div style={{ padding: "48px 0", textAlign: "center", color: "#888", lineHeight: 1.6 }}>
-          No cameras yet.
-          <br />
-          Plug a Growlink camera into a PoE port, then choose <b>Add camera</b> and enter its Growlink setup code.
+        <div className="card" style={{ textAlign: "center", padding: "56px 24px" }}>
+          <div className="eyebrow">No cameras yet</div>
+          <p className="muted" style={{ maxWidth: 440, margin: "12px auto 20px", lineHeight: 1.5 }}>
+            Plug a Growlink camera into a PoE port, then add it here with its Growlink setup code.
+          </p>
+          <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
         </div>
       )}
 
       {[...groups, ...(orphans.length ? [{ room: null as Room | null, cams: orphans }] : [])].map((g) => (
-        <section key={g.room?.id ?? "orphans"} style={{ marginBottom: 24 }}>
-          <h2 style={{ fontSize: 13, color: "#888", fontWeight: 500, letterSpacing: 0.3, textTransform: "uppercase", margin: "0 0 8px" }}>
-            {g.room ? `${g.room.name} · ${ROOM_TYPE_LABELS[g.room.roomType] ?? ""}` : "Room no longer in Growlink"}
-          </h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+        <section key={g.room?.id ?? "orphans"}>
+          <div className="section-head">
+            <span className="eyebrow" style={{ color: "var(--text)" }}>
+              {g.room ? g.room.name : "Room no longer in Growlink"}
+            </span>
+            {g.room && <span className="eyebrow">{ROOM_TYPE_LABELS[g.room.roomType] ?? ""}</span>}
+          </div>
+          <div className="cams">
             {g.cams.map((c) => (
               <CameraCard
                 key={c.id}
+                apiKey={apiKey}
+                orgId={orgId}
                 camera={c}
                 editing={editing === c.id}
                 rooms={rooms}
@@ -95,15 +107,12 @@ export default function CameraHome({
   );
 }
 
-function status(c: Camera): { label: string; color: string } {
-  if (c.revoked) return { label: "Revoked", color: "#666" };
+function status(c: Camera): { label: string; tone: "ok" | "warn" | "alarm" | "idle" } {
+  if (c.revoked) return { label: "Revoked", tone: "idle" };
   const seenAge = c.lastSeenAt ? Date.now() - new Date(c.lastSeenAt).getTime() : Infinity;
   const online = seenAge <= c.intervalSec * 3 * 1000;
-  if (!c.lastFrameAt)
-    return online
-      ? { label: "Connected, first frame soon", color: "#ef9f27" }
-      : { label: "Waiting for camera", color: "#ef9f27" };
-  return online ? { label: "Capturing", color: "#1d9e75" } : { label: "Offline", color: "#e24b4a" };
+  if (!c.lastFrameAt) return online ? { label: "First frame soon", tone: "warn" } : { label: "Waiting", tone: "warn" };
+  return online ? { label: "Capturing", tone: "ok" } : { label: "Offline", tone: "alarm" };
 }
 
 const ago = (iso: string | null) => {
@@ -115,7 +124,28 @@ const ago = (iso: string | null) => {
   return `${Math.round(s / 86400)} days ago`;
 };
 
+// Latest frame as a thumbnail. One frames call and one signing call per card.
+function useLatestFrame(apiKey: string, orgId: string, c: Camera) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!c.lastFrameAt) return;
+    let dead = false;
+    const t = new Date(c.lastFrameAt).getTime();
+    listFrames(apiKey, orgId, c.id, t - 15 * 60_000, t + 60_000)
+      .then((r) => {
+        const last = r.frames[r.frames.length - 1];
+        return last ? signFrames(apiKey, orgId, c.id, [last.id]).then((u) => u[last.id]) : undefined;
+      })
+      .then((u) => !dead && u && setUrl(u))
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [apiKey, orgId, c.id, c.lastFrameAt]);
+  return url;
+}
+
 function CameraCard({
+  apiKey,
+  orgId,
   camera: c,
   editing,
   rooms,
@@ -124,6 +154,8 @@ function CameraCard({
   onSave,
   onRevoke,
 }: {
+  apiKey: string;
+  orgId: string;
   camera: Camera;
   editing: boolean;
   rooms: Room[];
@@ -133,6 +165,7 @@ function CameraCard({
   onRevoke: () => Promise<void>;
 }) {
   const st = status(c);
+  const thumb = useLatestFrame(apiKey, orgId, c);
   const [name, setName] = useState(c.name);
   const [roomId, setRoomId] = useState(c.roomId);
   const [busy, setBusy] = useState(false);
@@ -145,41 +178,68 @@ function CameraCard({
   };
 
   return (
-    <div style={{ background: "#161616", border: "1px solid #242424", borderRadius: 8, padding: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 99, background: st.color, flex: "none" }} />
-        <div style={{ fontWeight: 500, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
-        <span style={{ fontSize: 12, color: st.color }}>{st.label}</span>
+    <div className="card">
+      <button
+        className="cam-thumb"
+        onClick={onOpen}
+        disabled={!c.lastFrameAt}
+        aria-label={`Open ${c.name} timelapse`}
+        style={{ border: "none", padding: 0, width: "calc(100% + 8px)", cursor: c.lastFrameAt ? "pointer" : "default" }}
+      >
+        {thumb ? <img src={thumb} alt="" /> : c.lastFrameAt ? "Loading…" : "No frames yet"}
+      </button>
+
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {c.name}
+          </div>
+          <div className="small muted" style={{ marginTop: 4 }}>
+            Last frame {ago(c.lastFrameAt)}
+            {c.serial && <> · {c.serial}</>}
+          </div>
+        </div>
+        <span className={`status ${st.tone}`}>{st.label}</span>
       </div>
-      <div style={{ fontSize: 12, color: "#888", marginTop: 6, lineHeight: 1.6 }}>
-        Last frame {ago(c.lastFrameAt)}
-        {c.serial && <><br />Serial {c.serial}</>}
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button style={{ ...btn, flex: 1 }} onClick={onOpen} disabled={!c.lastFrameAt}>View timelapse</button>
-        <button style={btn} onClick={onEdit} aria-expanded={editing}>Settings</button>
+
+      <div className="row" style={{ marginTop: 16 }}>
+        <button className="btn accent" style={{ flex: 1 }} onClick={onOpen} disabled={!c.lastFrameAt}>View timelapse</button>
+        <button className="btn" onClick={onEdit} aria-expanded={editing}>Manage</button>
       </div>
 
       {editing && (
-        <div style={{ borderTop: "1px solid #242424", marginTop: 12, paddingTop: 12, display: "grid", gap: 8 }}>
-          <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} aria-label="Camera name" />
-          <select value={roomId} onChange={(e) => setRoomId(e.target.value)} style={inputStyle} aria-label="Room">
-            {rooms.map((r) => <option key={r.id} value={r.id.toLowerCase()}>{r.name}</option>)}
-          </select>
-          <button style={btn} disabled={busy} onClick={run(() => onSave({ name, roomId }))}>Save</button>
-          {!c.revoked && (
-            <button
-              style={{ ...btn, color: "#e24b4a" }}
-              disabled={busy}
-              onClick={run(async () => {
-                if (confirm("Revoke this camera? It stops uploading immediately. Existing frames are kept. Reactivating it needs Growlink support."))
-                  await onRevoke();
-              })}
-            >
-              Revoke camera
-            </button>
+        <div className="stack" style={{ borderTop: "1px solid var(--line)", marginTop: 16, paddingTop: 16, gap: 12 }}>
+          <label className="label">
+            <span>Name</span>
+            <input className="field" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="label">
+            <span>Room</span>
+            <select className="field" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+              {rooms.map((r) => <option key={r.id} value={r.id.toLowerCase()}>{r.name}</option>)}
+            </select>
+          </label>
+          {roomId !== c.roomId && (
+            <div className="small" style={{ color: "var(--warn)" }}>
+              Moving rooms clears this camera&apos;s sensor selection.
+            </div>
           )}
-          {err && <div style={{ color: "#e24b4a", fontSize: 12 }}>{err}</div>}
+          <div className="row">
+            <button className="btn solid" style={{ flex: 1 }} disabled={busy} onClick={run(() => onSave({ name, roomId }))}>Save</button>
+            {!c.revoked && (
+              <button
+                className="btn danger"
+                disabled={busy}
+                onClick={run(async () => {
+                  if (confirm("Revoke this camera? It stops uploading immediately. Existing frames are kept. Reactivating it needs Growlink support."))
+                    await onRevoke();
+                })}
+              >
+                Revoke
+              </button>
+            )}
+          </div>
+          {err && <div className="error-text">{err}</div>}
         </div>
       )}
     </div>
@@ -215,43 +275,44 @@ function ClaimCamera({
   };
 
   return (
-    <form onSubmit={submit} style={{ background: "#161616", border: "1px solid #242424", borderRadius: 8, padding: 16, marginBottom: 20, display: "grid", gap: 10 }}>
-      <div style={{ fontWeight: 500 }}>Add a camera</div>
-      <div style={{ fontSize: 13, color: "#888" }}>
-        Plug the camera into a PoE port on a network with internet access, then enter its Growlink setup code: 8 characters like 7K3M-Q9XW, on the Growlink label or setup sheet. This is not the camera&apos;s 16-character UID.
+    <form onSubmit={submit} className="card" style={{ marginBottom: 28, borderColor: "var(--line-hi)" }}>
+      <div className="eyebrow ok">Add a camera</div>
+      <p className="muted" style={{ fontSize: 14, lineHeight: 1.5, margin: "8px 0 18px", maxWidth: 640 }}>
+        Plug the camera into a PoE port on a network with internet access, then enter its Growlink setup code:
+        8 characters like 7K3M-Q9XW, from the Growlink label or setup sheet. Not the camera&apos;s 16-character UID.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+        <label className="label">
+          <span>Growlink setup code</span>
+          <input
+            className="field mono"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder="XXXX-XXXX"
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={12}
+          />
+        </label>
+        <label className="label">
+          <span>Room</span>
+          <select className="field" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+            {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </label>
+        <label className="label">
+          <span>Name</span>
+          <input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="Canopy camera" maxLength={80} />
+        </label>
       </div>
-      <label style={labelStyle}>
-        Growlink setup code
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="XXXX-XXXX"
-          autoFocus
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={12}
-          style={{ ...inputStyle, fontFamily: "ui-monospace, monospace", letterSpacing: 2 }}
-        />
-      </label>
-      <label style={labelStyle}>
-        Room
-        <select value={roomId} onChange={(e) => setRoomId(e.target.value)} style={inputStyle}>
-          {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-      </label>
-      <label style={labelStyle}>
-        Name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Canopy camera" maxLength={80} style={inputStyle} />
-      </label>
-      {err && <div style={{ color: "#e24b4a", fontSize: 13 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 8 }}>
-        <button type="submit" style={btn} disabled={busy || !roomId || code.replace(/[\s-]/g, "").length < 8}>
+      {err && <div className="error-text" style={{ marginTop: 12 }}>{err}</div>}
+      <div className="row" style={{ marginTop: 18 }}>
+        <button type="submit" className="btn solid" disabled={busy || !roomId || code.replace(/[\s-]/g, "").length < 8}>
           {busy ? "Adding…" : "Add camera"}
         </button>
-        <button type="button" style={{ ...btn, color: "#888" }} onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>
       </div>
     </form>
   );
 }
-
-const labelStyle: React.CSSProperties = { display: "grid", gap: 4, fontSize: 12, color: "#888" };

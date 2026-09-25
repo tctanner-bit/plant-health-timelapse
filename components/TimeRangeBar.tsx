@@ -4,6 +4,8 @@ import { useMemo } from "react";
 
 type Preset = "1h" | "24h" | "7d" | "all";
 
+const DUR: Record<Exclude<Preset, "all">, number> = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000 };
+
 export default function TimeRangeBar({
   dataMin,
   dataMax,
@@ -25,7 +27,6 @@ export default function TimeRangeBar({
   countShown: number;
   countTotal?: number;
 }) {
-  // Convert a ms timestamp to the value an <input type="datetime-local"> wants.
   // datetime-local uses LOCAL time, no timezone suffix.
   const toLocalInput = (ms: number) => {
     const d = new Date(ms);
@@ -38,17 +39,16 @@ export default function TimeRangeBar({
   const minVal = useMemo(() => toLocalInput(dataMin), [dataMin]);
   const maxVal = useMemo(() => toLocalInput(dataMax), [dataMax]);
 
-  const applyPreset = (p: Preset) => {
-    if (p === "all") return onRangeChange(dataMin, dataMax);
-    const map: Record<Exclude<Preset, "all">, number> = {
-      "1h": 60 * 60 * 1000,
-      "24h": 24 * 60 * 60 * 1000,
-      "7d": 7 * 24 * 60 * 60 * 1000,
-    };
-    const end = dataMax;
-    const start = Math.max(dataMin, end - map[p]);
-    onRangeChange(start, end);
-  };
+  const presetRange = (p: Preset): [number, number] =>
+    p === "all" ? [dataMin, dataMax] : [Math.max(dataMin, dataMax - DUR[p]), dataMax];
+  // Several presets can cover the same span (a day of data is also "7d" and
+  // "All"); light up only the shortest one that matches.
+  const PRESETS: Preset[] = ["1h", "24h", "7d", "all"];
+  const activePreset = PRESETS.find((p) => {
+    const [s, e] = presetRange(p);
+    return s === rangeStart && e === rangeEnd;
+  });
+  const active = (p: Preset) => p === activePreset;
 
   const onStart = (s: string) => {
     const ms = new Date(s).getTime();
@@ -60,95 +60,35 @@ export default function TimeRangeBar({
   };
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: 10,
-        padding: "10px 12px",
-        background: "#161616",
-        border: "1px solid #242424",
-        borderRadius: 8,
-        marginBottom: 12,
-      }}
-    >
-      <Field label="From">
-        <input
-          type="datetime-local"
-          value={startVal}
-          min={minVal}
-          max={maxVal}
-          onChange={(e) => onStart(e.target.value)}
-          style={input}
-        />
-      </Field>
-      <Field label="To">
-        <input
-          type="datetime-local"
-          value={endVal}
-          min={minVal}
-          max={maxVal}
-          onChange={(e) => onEnd(e.target.value)}
-          style={input}
-        />
-      </Field>
-
-      <div style={{ display: "flex", gap: 4 }}>
+    <div className="toolbar">
+      <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
         {(["1h", "24h", "7d", "all"] as Preset[]).map((p) => (
-          <button key={p} onClick={() => applyPreset(p)} style={chip}>
-            {p === "all" ? "All" : `Last ${p}`}
+          <button
+            key={p}
+            className={`chip${active(p) ? " on" : ""}`}
+            onClick={() => onRangeChange(...presetRange(p))}
+            aria-pressed={active(p)}
+          >
+            {p === "all" ? "All" : p}
           </button>
         ))}
       </div>
-
-      <div style={{ flex: 1 }} />
-
-      <Field label="Jump to">
-        <input
-          type="datetime-local"
-          value={jumpValue}
-          min={startVal}
-          max={endVal}
-          onChange={(e) => onJump(e.target.value)}
-          style={input}
-        />
-      </Field>
-
-      <span style={{ fontSize: 12, color: "#888", fontVariantNumeric: "tabular-nums" }}>
+      <label className="label">
+        <span>From</span>
+        <input className="field" type="datetime-local" value={startVal} min={minVal} max={maxVal} onChange={(e) => onStart(e.target.value)} />
+      </label>
+      <label className="label">
+        <span>To</span>
+        <input className="field" type="datetime-local" value={endVal} min={minVal} max={maxVal} onChange={(e) => onEnd(e.target.value)} />
+      </label>
+      <div className="spacer" />
+      <label className="label">
+        <span>Jump to</span>
+        <input className="field" type="datetime-local" value={jumpValue} min={startVal} max={endVal} onChange={(e) => onJump(e.target.value)} />
+      </label>
+      <span className="eyebrow" style={{ alignSelf: "center", whiteSpace: "nowrap" }}>
         {countTotal == null ? `${countShown} frames` : `${countShown} of ${countTotal} frames`}
       </span>
     </div>
   );
 }
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ fontSize: 10, color: "#888", letterSpacing: 0.3, textTransform: "uppercase" }}>
-        {label}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-const input: React.CSSProperties = {
-  background: "#1f1f1f",
-  color: "#eee",
-  border: "1px solid #333",
-  borderRadius: 4,
-  padding: "4px 6px",
-  fontSize: 13,
-  colorScheme: "dark",
-};
-
-const chip: React.CSSProperties = {
-  background: "#1f1f1f",
-  color: "#aaa",
-  border: "1px solid #333",
-  borderRadius: 999,
-  padding: "4px 10px",
-  fontSize: 12,
-  cursor: "pointer",
-};

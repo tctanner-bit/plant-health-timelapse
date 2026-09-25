@@ -20,10 +20,10 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { METRIC_LABELS, Sensor, Uom, sameId } from "../lib/growlink";
 import { UOM_OPTIONS } from "../lib/prefs";
-import { PALETTE } from "../lib/sensors";
-import { btn, inputStyle } from "./ui";
 
 const MAX = 20;
+
+type Patch = { sensors?: string[]; averageSameType?: boolean };
 
 // Modal for a camera's display settings. Nothing applies until Save:
 //   Sensors — saved on the camera, shared with everyone in the organization.
@@ -34,6 +34,7 @@ export default function DisplaySettings({
   roomName,
   roomSensors,
   selected,
+  averageSameType,
   uom,
   initialTab = "sensors",
   onSave,
@@ -43,21 +44,23 @@ export default function DisplaySettings({
   roomName: string;
   roomSensors: Sensor[] | null;
   selected: string[];
+  averageSameType: boolean;
   uom: Uom;
   initialTab?: "sensors" | "units";
-  onSave: (sensors: string[] | null, uom: Uom | null) => Promise<void>;
+  onSave: (patch: Patch | null, uom: Uom | null) => Promise<void>;
   onClose: () => void;
 }) {
   const initial = useMemo(() => selected.map((s) => s.toLowerCase()), [selected]);
   const [tab, setTab] = useState(initialTab);
   const [picked, setPicked] = useState<string[]>(initial);
+  const [average, setAverage] = useState(averageSameType);
   const [units, setUnits] = useState<Uom>(uom);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
 
-  const sensorsDirty = picked.join() !== initial.join();
+  const sensorsDirty = picked.join() !== initial.join() || average !== averageSameType;
   const unitsDirty = JSON.stringify(units) !== JSON.stringify(uom);
   const dirty = sensorsDirty || unitsDirty;
 
@@ -83,7 +86,10 @@ export default function DisplaySettings({
     setBusy(true);
     setErr(null);
     try {
-      await onSave(sensorsDirty ? picked : null, unitsDirty ? units : null);
+      const patch: Patch = {};
+      if (picked.join() !== initial.join()) patch.sensors = picked;
+      if (average !== averageSameType) patch.averageSameType = average;
+      await onSave(Object.keys(patch).length ? patch : null, unitsDirty ? units : null);
       onClose();
     } catch (e: any) {
       setErr(e.message);
@@ -98,6 +104,18 @@ export default function DisplaySettings({
     const k = id.toLowerCase();
     setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : p.length >= MAX ? p : [...p, k]));
   };
+
+  // How many picked sensors share each metric — those get averaged.
+  const perMetric = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const id of picked) {
+      const s = byId(id);
+      if (s) m.set(s.metric, (m.get(s.metric) ?? 0) + 1);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, roomSensors]);
+  const averagedTypes = Array.from(perMetric.entries()).filter(([, n]) => n > 1);
 
   const groups = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -125,89 +143,67 @@ export default function DisplaySettings({
     setPicked((p) => arrayMove(p, p.indexOf(String(active.id)), p.indexOf(String(over.id))));
   };
 
-  const changes = [
-    sensorsDirty && "sensors",
-    unitsDirty && "units",
-  ].filter(Boolean).join(" and ");
+  const changes = [sensorsDirty && "sensors", unitsDirty && "units"].filter(Boolean).join(" and ");
 
   return (
-    <div style={backdrop} onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
-      <div
-        ref={dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        tabIndex={-1}
-        style={panel}
-      >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "16px 20px 0" }}>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
+      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1} className="modal">
+        <div className="modal-head">
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 id="settings-title" style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>Display settings</h2>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{cameraName} · {roomName}</div>
+            <div className="eyebrow">{cameraName} · {roomName}</div>
+            <h2 id="settings-title" className="title" style={{ fontSize: 24, marginTop: 6 }}>Display settings</h2>
           </div>
-          <button onClick={cancel} aria-label="Cancel and close" style={iconBtn}>✕</button>
+          <button onClick={cancel} aria-label="Cancel and close" className="btn icon ghost">✕</button>
         </div>
 
-        {/* Tabs */}
-        <div role="tablist" style={{ display: "flex", gap: 4, padding: "12px 20px 0", borderBottom: "1px solid #242424" }}>
+        <div role="tablist" className="tabs">
           {(["sensors", "units"] as const).map((t) => (
-            <button
-              key={t}
-              role="tab"
-              aria-selected={tab === t}
-              onClick={() => setTab(t)}
-              style={{
-                ...tabBtn,
-                color: tab === t ? "#eee" : "#888",
-                borderBottomColor: tab === t ? "#1d9e75" : "transparent",
-              }}
-            >
-              {t === "sensors" ? `Sensors (${picked.length})` : "Units"}
-              {(t === "sensors" ? sensorsDirty : unitsDirty) && <span aria-label="changed" style={dot} />}
+            <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className="tab">
+              {t === "sensors" ? `Sensors · ${picked.length}` : "Units"}
+              {(t === "sensors" ? sensorsDirty : unitsDirty) && <span aria-label="changed" className="dirty" />}
             </button>
           ))}
         </div>
 
-        {/* Body */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+        <div className="modal-body">
           {tab === "sensors" ? (
             <>
-              <p style={note}>
-                Pick the sensors from <b>{roomName}</b> to show with this camera, then drag them into the order you
-                want. Shared with everyone in your organization.
+              <p className="muted" style={{ fontSize: 14, margin: "0 0 18px", lineHeight: 1.5 }}>
+                Pick the sensors from <b style={{ color: "var(--text)" }}>{roomName}</b> to show with this camera,
+                then drag them into order. Shared with everyone in your organization.
               </p>
-              <div style={columns}>
-                {/* Available */}
-                <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-                  <div style={colHead}>Available in {roomName}</div>
+              <div className="pick-cols">
+                <div>
+                  <div className="eyebrow" style={{ marginBottom: 10 }}>Available in {roomName}</div>
                   <input
+                    className="field"
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
                     placeholder="Search by name, module or type"
                     aria-label="Search sensors"
-                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 8 }}
+                    style={{ marginBottom: 10 }}
                   />
-                  <div style={listBox}>
+                  <div className="listbox">
                     {roomSensors == null ? (
-                      <div style={empty}>Loading sensors from Growlink…</div>
+                      <Empty>Loading sensors from Growlink…</Empty>
                     ) : roomSensors.length === 0 ? (
-                      <div style={empty}>Growlink reports no sensors in this room.</div>
+                      <Empty>Growlink reports no sensors in this room.</Empty>
                     ) : groups.length === 0 ? (
-                      <div style={empty}>No sensors match “{filter}”.</div>
+                      <Empty>No sensors match “{filter}”.</Empty>
                     ) : (
                       groups.map(([metric, list]) => (
                         <div key={metric}>
-                          <div style={groupHead}>{metric}</div>
+                          <div className="group">{metric}</div>
                           {list.map((s) => {
                             const on = picked.includes(s.id.toLowerCase());
                             const full = !on && picked.length >= MAX;
                             return (
-                              <label key={s.id} style={{ ...availRow, opacity: full ? 0.4 : 1, background: on ? "#132019" : "transparent" }}>
-                                <input type="checkbox" checked={on} disabled={full} onChange={() => toggle(s.id)} style={{ accentColor: "#1d9e75" }} />
+                              <label key={s.id} className={`pick${on ? " on" : ""}`} style={{ opacity: full ? 0.4 : 1, position: "relative" }}>
+                                <input type="checkbox" checked={on} disabled={full} onChange={() => toggle(s.id)} />
+                                <span className="check" aria-hidden>{on ? "✓" : ""}</span>
                                 <span style={{ flex: 1, minWidth: 0 }}>
-                                  <span style={{ display: "block" }}>{s.name}</span>
-                                  {s.moduleName && <span style={sub}>{s.moduleName}</span>}
+                                  <div className="pick-name">{s.name}</div>
+                                  {s.moduleName && <div className="pick-sub">{s.moduleName}</div>}
                                 </span>
                               </label>
                             );
@@ -218,28 +214,26 @@ export default function DisplaySettings({
                   </div>
                 </div>
 
-                {/* Chosen, sortable */}
-                <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-                  <div style={colHead}>
-                    Shown with this camera
-                    <span style={{ color: "#666", fontWeight: 400 }}> · drag to reorder</span>
+                <div>
+                  <div className="eyebrow" style={{ marginBottom: 10 }}>
+                    Shown with this camera <span style={{ color: "var(--dim)" }}>· drag to reorder</span>
                   </div>
-                  <div style={{ ...listBox, padding: 6 }}>
+                  <div className="listbox" style={{ height: 392 }}>
                     {picked.length === 0 ? (
-                      <div style={empty}>Tick sensors on the left and they’ll appear here.</div>
+                      <Empty>Tick sensors on the left and they’ll appear here.</Empty>
                     ) : (
                       <DndContext sensors={dnd} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
                         <SortableContext items={picked} strategy={verticalListSortingStrategy}>
-                          <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
-                            {picked.map((id, i) => {
+                          <ol className="sortable">
+                            {picked.map((id) => {
                               const s = byId(id);
                               return (
                                 <SortableRow
                                   key={id}
                                   id={id}
-                                  color={PALETTE[i % PALETTE.length]}
                                   name={s?.name ?? "Removed from Growlink"}
                                   detail={s ? [METRIC_LABELS[s.metric], s.moduleName].filter(Boolean).join(" · ") : ""}
+                                  averaged={!!s && average && (perMetric.get(s.metric) ?? 0) > 1}
                                   missing={!s && roomSensors != null}
                                   onRemove={() => toggle(id)}
                                 />
@@ -250,52 +244,56 @@ export default function DisplaySettings({
                       </DndContext>
                     )}
                   </div>
-                  <div style={{ ...sub, marginTop: 6 }}>{picked.length} of {MAX} max</div>
                 </div>
               </div>
+
+              <label className="switch-row" onClick={(e) => { e.preventDefault(); setAverage((a) => !a); }}>
+                <span className={`switch${average ? " on" : ""}`} role="switch" aria-checked={average} />
+                <span style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700 }}>Average sensors of the same type</div>
+                  <div className="small muted" style={{ marginTop: 2, lineHeight: 1.45 }}>
+                    {averagedTypes.length
+                      ? `Shows ${averagedTypes
+                          .map(([m, n]) => `${n} ${(METRIC_LABELS[m] ?? "sensor").toLowerCase()} sensors`)
+                          .join(", ")} as one room average, with the spread between them.`
+                      : "When you pick more than one sensor of a type, show them as one room average."}
+                  </div>
+                </span>
+              </label>
             </>
           ) : (
             <>
-              <p style={note}>Your preference, saved in this browser. Applies to every camera.</p>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16 }}>
+              <p className="muted" style={{ fontSize: 14, margin: "0 0 18px" }}>
+                Your preference, saved in this browser. Applies to every camera.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
                 {UOM_OPTIONS.map((o) => (
-                  <fieldset key={o.key} style={{ border: "1px solid #242424", borderRadius: 8, padding: "10px 12px", margin: 0 }}>
-                    <legend style={{ fontSize: 12, color: "#888", padding: "0 4px" }}>{o.label}</legend>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      {o.options.map((x) => {
-                        const on = units[o.key] === x.value;
-                        return (
-                          <button
-                            key={x.value}
-                            onClick={() => setUnits({ ...units, [o.key]: x.value } as Uom)}
-                            aria-pressed={on}
-                            style={{
-                              ...btn,
-                              flex: 1,
-                              background: on ? "#132019" : "#1a1a1a",
-                              borderColor: on ? "#1d9e75" : "#333",
-                              color: on ? "#eee" : "#999",
-                            }}
-                          >
-                            {x.label}
-                          </button>
-                        );
-                      })}
+                  <div key={o.key} className="label">
+                    <span>{o.label}</span>
+                    <div className="seg" role="group" aria-label={o.label}>
+                      {o.options.map((x) => (
+                        <button
+                          key={x.value}
+                          aria-pressed={units[o.key] === x.value}
+                          onClick={() => setUnits({ ...units, [o.key]: x.value } as Uom)}
+                        >
+                          {x.label}
+                        </button>
+                      ))}
                     </div>
-                  </fieldset>
+                  </div>
                 ))}
               </div>
             </>
           )}
         </div>
 
-        {/* Footer: always visible */}
-        <div style={footer}>
-          <div style={{ flex: 1, fontSize: 13, color: err ? "#e24b4a" : dirty ? "#ef9f27" : "#666", minWidth: 0 }}>
+        <div className="modal-foot">
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: err ? "var(--alarm)" : dirty ? "var(--warn)" : "var(--dim)" }}>
             {err ?? (dirty ? `Unsaved changes to ${changes}` : "No changes")}
           </div>
-          <button onClick={cancel} style={{ ...btn, padding: "8px 16px" }}>Cancel</button>
-          <button onClick={save} disabled={!dirty || busy} style={{ ...primary, opacity: !dirty || busy ? 0.45 : 1 }}>
+          <button onClick={cancel} className="btn ghost">Cancel</button>
+          <button onClick={save} disabled={!dirty || busy} className="btn solid">
             {busy ? "Saving…" : "Save changes"}
           </button>
         </div>
@@ -304,18 +302,22 @@ export default function DisplaySettings({
   );
 }
 
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div style={{ padding: 28, color: "var(--muted)", fontSize: 13, textAlign: "center" }}>{children}</div>;
+}
+
 function SortableRow({
   id,
-  color,
   name,
   detail,
+  averaged,
   missing,
   onRemove,
 }: {
   id: string;
-  color: string;
   name: string;
   detail: string;
+  averaged: boolean;
   missing: boolean;
   onRemove: () => void;
 }) {
@@ -323,145 +325,20 @@ function SortableRow({
   return (
     <li
       ref={setNodeRef}
-      style={{
-        transform: CSS.Transform.toString(transform),
-        transition,
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "8px 10px",
-        background: isDragging ? "#232323" : "#1a1a1a",
-        border: `1px solid ${isDragging ? "#1d9e75" : "#2a2a2a"}`,
-        borderRadius: 6,
-        boxShadow: isDragging ? "0 6px 20px rgba(0,0,0,0.5)" : "none",
-        position: "relative",
-        zIndex: isDragging ? 1 : 0,
-      }}
+      className={`sort-item${isDragging ? " dragging" : ""}`}
+      style={{ transform: CSS.Transform.toString(transform), transition, position: "relative", zIndex: isDragging ? 1 : 0 }}
     >
-      <button
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-        aria-label={`Drag to reorder ${name}`}
-        style={handle}
-      >
+      <button ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Drag to reorder ${name}`} className="handle">
         ⠿
       </button>
-      <span style={{ width: 10, height: 10, borderRadius: 99, background: color, flex: "none" }} />
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: missing ? "#ef9f27" : "#eee" }}>
+        <div className="pick-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: missing ? "var(--warn)" : undefined }}>
           {name}
-        </span>
-        {detail && <span style={sub}>{detail}</span>}
+        </div>
+        {detail && <div className="pick-sub">{detail}</div>}
       </span>
-      <button onClick={onRemove} aria-label={`Remove ${name}`} style={iconBtn}>✕</button>
+      {averaged && <span className="avg-badge">Avg</span>}
+      <button onClick={onRemove} aria-label={`Remove ${name}`} className="btn icon ghost" style={{ width: 32, minHeight: 32 }}>✕</button>
     </li>
   );
 }
-
-const backdrop: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.6)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-  zIndex: 50,
-};
-const panel: React.CSSProperties = {
-  width: "min(880px, 100%)",
-  maxHeight: "min(760px, 100%)",
-  display: "flex",
-  flexDirection: "column",
-  background: "#141414",
-  border: "1px solid #2a2a2a",
-  borderRadius: 12,
-  boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
-  outline: "none",
-  color: "#eee",
-};
-const columns: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-  gap: 20,
-};
-const colHead: React.CSSProperties = { fontSize: 13, fontWeight: 500, marginBottom: 8 };
-const listBox: React.CSSProperties = {
-  border: "1px solid #242424",
-  borderRadius: 8,
-  height: 340,
-  overflowY: "auto",
-  background: "#111",
-};
-const note: React.CSSProperties = { fontSize: 13, color: "#999", margin: "0 0 16px" };
-const sub: React.CSSProperties = { display: "block", fontSize: 12, color: "#777" };
-const empty: React.CSSProperties = { padding: 24, color: "#777", fontSize: 13, textAlign: "center" };
-const groupHead: React.CSSProperties = {
-  fontSize: 11,
-  color: "#888",
-  letterSpacing: 0.4,
-  textTransform: "uppercase",
-  padding: "8px 12px 4px",
-  background: "#161616",
-  position: "sticky",
-  top: 0,
-};
-const availRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "8px 12px",
-  fontSize: 14,
-  cursor: "pointer",
-};
-const handle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#777",
-  cursor: "grab",
-  fontSize: 18,
-  lineHeight: 1,
-  padding: "4px 2px",
-  touchAction: "none",
-};
-const iconBtn: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#888",
-  cursor: "pointer",
-  fontSize: 15,
-  padding: 6,
-  lineHeight: 1,
-};
-const tabBtn: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  borderBottom: "2px solid transparent",
-  padding: "8px 12px",
-  fontSize: 14,
-  cursor: "pointer",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-};
-const dot: React.CSSProperties = { width: 6, height: 6, borderRadius: 99, background: "#ef9f27" };
-const footer: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "14px 20px",
-  borderTop: "1px solid #242424",
-  background: "#161616",
-  borderRadius: "0 0 12px 12px",
-};
-const primary: React.CSSProperties = {
-  background: "#1d9e75",
-  color: "#04140e",
-  border: "none",
-  borderRadius: 6,
-  padding: "8px 18px",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};

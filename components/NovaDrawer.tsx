@@ -14,11 +14,11 @@ export type JournalEntry = {
 export type ChatTurn = { role: "user" | "nova"; text: string; ts: number };
 
 const TAG_COLORS: Record<JournalEntry["tags"][number], string> = {
-  stress: "#e24b4a",
-  growth: "#1d9e75",
-  environment: "#378add",
+  stress: "#e5484d",
+  growth: "#3fb984",
+  environment: "#4f9fe8",
   irrigation: "#5dcaa5",
-  light: "#ef9f27",
+  light: "#e0a33c",
 };
 
 export default function NovaDrawer({
@@ -90,14 +90,14 @@ export default function NovaDrawer({
           right: 0,
           height: "100vh",
           width: "min(440px, 100vw)",
-          background: "#121212",
-          borderLeft: "1px solid #242424",
+          background: "var(--ink)",
+          borderLeft: "1px solid var(--line)",
           transform: open ? "translateX(0)" : "translateX(100%)",
           transition: "transform 220ms ease",
           zIndex: 41,
           display: "flex",
           flexDirection: "column",
-          color: "#eee",
+          color: "var(--text)",
         }}
       >
         <Header onClose={onClose} />
@@ -128,13 +128,13 @@ function Header({ onClose }: { onClose: () => void }) {
         alignItems: "center",
         gap: 10,
         padding: "14px 16px",
-        borderBottom: "1px solid #242424",
+        borderBottom: "1px solid var(--line)",
       }}
     >
       <NovaMark />
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 500, fontSize: 15 }}>Nova AI</div>
-        <div style={{ fontSize: 11, color: "#888" }}>Daily journal & grow assistant</div>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>Nova AI</div>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>Daily journal & grow assistant</div>
       </div>
       <button onClick={onClose} aria-label="Close" style={iconBtn}>
         ✕
@@ -149,12 +149,12 @@ function NovaMark() {
       style={{
         width: 28,
         height: 28,
-        borderRadius: 8,
-        background: "linear-gradient(135deg, #7f77dd, #d4537e)",
+        borderRadius: 4,
+        background: "linear-gradient(135deg, #a47eff, #3fb984)",
         display: "grid",
         placeItems: "center",
         fontSize: 13,
-        fontWeight: 500,
+        fontWeight: 700,
         color: "#fff",
       }}
       aria-hidden
@@ -172,7 +172,7 @@ function Tabs({
   onTab: (t: "journal" | "ask") => void;
 }) {
   return (
-    <div style={{ display: "flex", borderBottom: "1px solid #242424" }}>
+    <div style={{ display: "flex", borderBottom: "1px solid var(--line)" }}>
       {(["journal", "ask"] as const).map((t) => {
         const active = tab === t;
         return (
@@ -182,9 +182,9 @@ function Tabs({
             style={{
               flex: 1,
               background: "transparent",
-              color: active ? "#eee" : "#888",
+              color: active ? "var(--text)" : "var(--muted)",
               border: "none",
-              borderBottom: `2px solid ${active ? "#7f77dd" : "transparent"}`,
+              borderBottom: `2px solid ${active ? "#a47eff" : "transparent"}`,
               padding: "10px 12px",
               fontSize: 13,
               cursor: "pointer",
@@ -208,7 +208,7 @@ function JournalList({
 }) {
   if (entries.length === 0) {
     return (
-      <div style={{ padding: 24, color: "#888", fontSize: 13 }}>
+      <div style={{ padding: 24, color: "var(--muted)", fontSize: 13 }}>
         Nova will write a daily journal entry once we wire her up.
       </div>
     );
@@ -219,12 +219,12 @@ function JournalList({
         <article
           key={e.id}
           style={{
-            borderBottom: "1px solid #1f1f1f",
+            borderBottom: "1px solid var(--line)",
             padding: "16px 0",
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-            <time style={{ fontSize: 11, color: "#888", letterSpacing: 0.3, textTransform: "uppercase" }}>
+            <time style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 0.3, textTransform: "uppercase" }}>
               {formatDay(e.day)}
             </time>
             <div style={{ flex: 1 }} />
@@ -245,10 +245,10 @@ function JournalList({
               </span>
             ))}
           </div>
-          <h3 style={{ fontSize: 14, margin: "0 0 6px", fontWeight: 500, lineHeight: 1.35 }}>
+          <h3 style={{ fontSize: 14, margin: "0 0 6px", fontWeight: 700, lineHeight: 1.35 }}>
             {e.headline}
           </h3>
-          <p style={{ fontSize: 13, lineHeight: 1.55, color: "#bbb", margin: "0 0 10px" }}>
+          <p style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text)", margin: "0 0 10px" }}>
             {e.body}
           </p>
           {e.highlights.length > 0 && (
@@ -267,7 +267,7 @@ function JournalList({
           )}
         </article>
       ))}
-      <div style={{ fontSize: 11, color: "#555", marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 16 }}>
         Entries shown are placeholder. Nova writes real ones once the backend is wired.
       </div>
     </div>
@@ -293,7 +293,7 @@ function AskPanel({
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <div ref={scrollerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
         {chat.length === 0 && !thinking && (
-          <div style={{ color: "#888", fontSize: 13, padding: "8px 0" }}>
+          <div style={{ color: "var(--muted)", fontSize: 13, padding: "8px 0" }}>
             Ask Nova about anything she's seen in the grow.
             <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
               {SUGGESTIONS.map((s) => (
@@ -311,7 +311,7 @@ function AskPanel({
       </div>
       <div
         style={{
-          borderTop: "1px solid #242424",
+          borderTop: "1px solid var(--line)",
           padding: 12,
           display: "flex",
           gap: 8,
@@ -331,10 +331,10 @@ function AskPanel({
           rows={2}
           style={{
             flex: 1,
-            background: "#1a1a1a",
-            color: "#eee",
-            border: "1px solid #2a2a2a",
-            borderRadius: 8,
+            background: "var(--panel)",
+            color: "var(--text)",
+            border: "1px solid var(--line)",
+            borderRadius: 4,
             padding: "8px 10px",
             fontFamily: "inherit",
             fontSize: 13,
@@ -362,11 +362,11 @@ function Bubble({ turn, muted = false }: { turn: ChatTurn; muted?: boolean }) {
       <div
         style={{
           maxWidth: "85%",
-          background: isUser ? "#1f1f1f" : "#16151f",
-          border: `1px solid ${isUser ? "#2a2a2a" : "#2a2a3a"}`,
-          color: muted ? "#888" : "#eee",
+          background: isUser ? "var(--panel-hi)" : "var(--panel-hi)",
+          border: `1px solid ${isUser ? "var(--line)" : "var(--line-hi)"}`,
+          color: muted ? "var(--muted)" : "var(--text)",
           padding: "8px 10px",
-          borderRadius: 10,
+          borderRadius: 4,
           fontSize: 13,
           lineHeight: 1.5,
           whiteSpace: "pre-wrap",
@@ -392,9 +392,9 @@ const SUGGESTIONS = [
 
 const iconBtn: React.CSSProperties = {
   background: "transparent",
-  color: "#888",
-  border: "1px solid #2a2a2a",
-  borderRadius: 6,
+  color: "var(--muted)",
+  border: "1px solid var(--line)",
+  borderRadius: 4,
   width: 28,
   height: 28,
   cursor: "pointer",
@@ -402,20 +402,20 @@ const iconBtn: React.CSSProperties = {
 };
 
 const highlightBtn: React.CSSProperties = {
-  background: "#1a1a1a",
-  color: "#bbb",
-  border: "1px solid #2a2a2a",
-  borderRadius: 6,
+  background: "var(--panel)",
+  color: "var(--text)",
+  border: "1px solid var(--line)",
+  borderRadius: 4,
   padding: "3px 8px",
   fontSize: 11,
   cursor: "pointer",
 };
 
 const suggestionBtn: React.CSSProperties = {
-  background: "#161616",
-  color: "#bbb",
-  border: "1px solid #242424",
-  borderRadius: 8,
+  background: "var(--panel)",
+  color: "var(--text)",
+  border: "1px solid var(--line)",
+  borderRadius: 4,
   padding: "8px 10px",
   fontSize: 12,
   textAlign: "left",
@@ -423,10 +423,10 @@ const suggestionBtn: React.CSSProperties = {
 };
 
 const sendBtn: React.CSSProperties = {
-  background: "#7f77dd",
+  background: "#a47eff",
   color: "#fff",
   border: "none",
-  borderRadius: 8,
+  borderRadius: 4,
   padding: "8px 14px",
   fontSize: 13,
   cursor: "pointer",

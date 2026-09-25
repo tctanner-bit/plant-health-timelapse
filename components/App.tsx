@@ -5,7 +5,7 @@ import { Camera, listCameras, loadApiKey, saveApiKey } from "../lib/api";
 import { Org, Room, getOrganizations, getRooms } from "../lib/growlink";
 import CameraHome from "./CameraHome";
 import Player from "./Player";
-import { btn, Centered, inputStyle } from "./ui";
+import { Brand, Centered } from "./ui";
 
 // Top-level flow: API key → organization → cameras (grouped by room) → player.
 // The selected org and camera live in the URL (?org=…&camera=…) so a Builder
@@ -81,12 +81,12 @@ export default function App() {
   if (error)
     return (
       <Centered>
-        <div>Error: {error}</div>
-        <button style={{ ...btn, marginTop: 12 }} onClick={reload}>Retry</button>
+        <div className="error-text">{error}</div>
+        <button className="btn" style={{ marginTop: 16 }} onClick={reload}>Retry</button>
       </Centered>
     );
-  if (!orgs || !rooms || !cameras || !orgId) return <Centered>Loading…</Centered>;
-  if (orgs.length === 0) return <Centered>This API key isn't linked to any organization.</Centered>;
+  if (!orgs || !rooms || !cameras || !orgId) return <Centered><span className="eyebrow">Loading…</span></Centered>;
+  if (orgs.length === 0) return <Centered><span className="muted">This API key isn&apos;t linked to any organization.</span></Centered>;
 
   const camera = cameras.find((c) => c.id === cameraId);
   if (camera) {
@@ -141,22 +141,26 @@ function KeyGate({ onKey }: { onKey: (k: string) => void }) {
 
   return (
     <Centered>
-      <form onSubmit={submit} style={{ width: "min(420px, 100%)", padding: 16 }}>
-        <h1 style={{ fontSize: 18, fontWeight: 500, margin: "0 0 4px" }}>Plant Health AI</h1>
-        <p style={{ fontSize: 13, color: "#888", margin: "0 0 16px" }}>
-          Enter your Growlink API key (portal → Builder → Authentication). It stays in this browser tab
-          and is forgotten when the tab closes.
+      <form onSubmit={submit} className="card" style={{ width: "min(440px, 100%)", textAlign: "left", padding: 28 }}>
+        <Brand />
+        <h1 className="title" style={{ marginTop: 14 }}>Sign in</h1>
+        <p className="muted" style={{ fontSize: 14, lineHeight: 1.5, margin: "8px 0 22px" }}>
+          Use your Growlink API key (portal → Builder → Authentication). It stays in this browser tab and is
+          forgotten when the tab closes.
         </p>
-        <input
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="Growlink API key"
-          autoFocus
-          style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
-        />
-        {err && <div style={{ color: "#e24b4a", fontSize: 13, marginTop: 8 }}>{err}</div>}
-        <button type="submit" disabled={busy || !key.trim()} style={{ ...btn, marginTop: 12, width: "100%" }}>
+        <label className="label">
+          <span>API key</span>
+          <input
+            className="field"
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Paste your key"
+            autoFocus
+          />
+        </label>
+        {err && <div className="error-text" style={{ marginTop: 10 }}>{err}</div>}
+        <button type="submit" className="btn solid" disabled={busy || !key.trim()} style={{ marginTop: 18, width: "100%" }}>
           {busy ? "Checking…" : "Continue"}
         </button>
       </form>

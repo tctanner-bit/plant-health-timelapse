@@ -2,6 +2,8 @@
 
 import { SensorMeta } from "../lib/sensors";
 
+// Show or hide rows for this viewing session. What's configured is chosen in
+// Settings; this only filters it.
 export default function SensorToggles({
   sensors,
   visible,
@@ -11,28 +13,20 @@ export default function SensorToggles({
   visible: Set<string>;
   onToggle: (id: string) => void;
 }) {
-  if (sensors.length === 0) return null;
+  if (sensors.length < 2) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 16 }}>
+    <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
       {sensors.map((s) => {
         const on = visible.has(s.id);
         return (
           <button
             key={s.id}
+            className={`chip${on ? " on" : ""}`}
             onClick={() => onToggle(s.id)}
-            title={s.label}
-            style={{
-              fontSize: 12,
-              padding: "4px 10px",
-              borderRadius: 999,
-              border: `1px solid ${on ? s.color : "#2a2a2a"}`,
-              background: on ? `${s.color}22` : "transparent",
-              color: on ? "#eee" : "#888",
-              cursor: "pointer",
-            }}
+            title={s.detail ? `${s.label} · ${s.detail}` : s.label}
             aria-pressed={on}
           >
-            <span style={{ color: s.color, marginRight: 6 }}>●</span>
+            <span className="swatch" style={{ background: on ? s.color : "var(--dim)" }} />
             {s.label}
           </button>
         );

@@ -16,6 +16,7 @@ export type Camera = {
   lastErrorAt: string | null;
   revoked: boolean;
   sensors: string[]; // Growlink sensor ids from the camera's room, display order
+  averageSameType: boolean; // show same-type sensors as one room average
 };
 
 export type FramesResponse = {
@@ -48,7 +49,7 @@ export const listCameras = (key: string, orgId: string) =>
 export const claimCamera = (key: string, orgId: string, body: { code: string; roomId: string; name: string }) =>
   call<{ camera: Camera }>(key, `${base(orgId)}/claim`, { method: "POST", body }).then((r) => r.camera);
 
-export const updateCamera = (key: string, orgId: string, id: string, body: Partial<{ roomId: string; name: string; sensors: string[] }>) =>
+export const updateCamera = (key: string, orgId: string, id: string, body: Partial<{ roomId: string; name: string; sensors: string[]; averageSameType: boolean }>) =>
   call<{ camera: Camera }>(key, `${base(orgId)}/${id}`, { method: "PATCH", body }).then((r) => r.camera);
 
 export const revokeCamera = (key: string, orgId: string, id: string) =>

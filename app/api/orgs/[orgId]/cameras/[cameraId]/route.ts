@@ -45,6 +45,11 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (typeof sensors === "string") return NextResponse.json({ error: sensors }, { status: 400 });
     patch.sensors = sensors;
   }
+  if (body.averageSameType !== undefined) {
+    if (typeof body.averageSameType !== "boolean")
+      return NextResponse.json({ error: "averageSameType must be true or false" }, { status: 400 });
+    patch.average_same_type = body.averageSameType;
+  }
   if (Object.keys(patch).length === 0) return NextResponse.json({ camera: toCamera(cam) });
 
   const { data, error } = await db()
