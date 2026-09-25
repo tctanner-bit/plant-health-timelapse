@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-import { SensorKey, Series, generateFakeSeries } from "../lib/sensors";
+import { Camera, listFrames, signFrames } from "../lib/api";
+import { getSensorChart, getSensors } from "../lib/growlink";
+import {
+  SensorMeta,
+  Series,
+  defaultVisible,
+  seriesFromChart,
+  toSensorMeta,
+} from "../lib/sensors";
 import SensorReadouts from "./SensorReadouts";
 import SensorCharts from "./SensorCharts";
 import SensorToggles from "./SensorToggles";
@@ -10,216 +17,235 @@ import TimeRangeBar from "./TimeRangeBar";
 import NovaDrawer, { ChatTurn, JournalEntry } from "./NovaDrawer";
 import { buildPlaceholderJournal, placeholderAsk } from "../lib/nova-placeholder";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+type Frame = { id: number; ts: number };
 
-type Frame = { id: number; captured_at: string; storage_path: string; ts: number };
+const DAY = 24 * 3600 * 1000;
+const PREFETCH = 20;
 
-const BUCKET = "frames";
-const SIGNED_URL_TTL_SEC = 60 * 60;
-
-export default function Player() {
-  const [allFrames, setAllFrames] = useState<Frame[] | null>(null);
+export default function Player({
+  apiKey,
+  orgId,
+  camera,
+  roomName,
+  onBack,
+}: {
+  apiKey: string;
+  orgId: string;
+  camera: Camera;
+  roomName: string;
+  onBack: () => void;
+}) {
+  const [bounds, setBounds] = useState<{ first: number; last: number } | null | undefined>(undefined);
+  const [range, setRange] = useState<[number, number] | null>(null);
+  const [frames, setFrames] = useState<Frame[] | null>(null);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(8);
   const [error, setError] = useState<string | null>(null);
-  const [visible, setVisible] = useState<Set<SensorKey>>(
-    new Set<SensorKey>(["air_temp", "humidity", "vpd", "par", "sub_moisture"])
-  );
-  const [rangeStart, setRangeStart] = useState<number | null>(null);
-  const [rangeEnd, setRangeEnd] = useState<number | null>(null);
+
+  const [sensors, setSensors] = useState<SensorMeta[]>([]);
+  const [visible, setVisible] = useState<Set<string>>(new Set());
+  const [series, setSeries] = useState<Series | null>(null);
+  const [nights, setNights] = useState<[number, number][]>([]);
+  const [sensorError, setSensorError] = useState<string | null>(null);
 
   const [novaOpen, setNovaOpen] = useState(false);
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [thinking, setThinking] = useState(false);
 
   const timer = useRef<number | null>(null);
+  const pendingJump = useRef<number | null>(null);
+  const requested = useRef<Set<number>>(new Set());
 
+  // 1. Camera history bounds → default to the most recent day.
   useEffect(() => {
+    let dead = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("frames")
-        .select("id, captured_at, storage_path")
-        .order("captured_at", { ascending: true })
-        .limit(5000);
-      if (error) setError(error.message);
-      else {
-        const withTs: Frame[] = (data ?? []).map((f) => ({
-          ...f,
-          ts: new Date(f.captured_at).getTime(),
-        }));
-        setAllFrames(withTs);
-        if (withTs.length > 0) {
-          setRangeStart(withTs[0].ts);
-          setRangeEnd(withTs[withTs.length - 1].ts);
-        }
+      try {
+        const r = await listFrames(apiKey, orgId, camera.id);
+        if (dead) return;
+        if (r.first == null || r.last == null) return setBounds(null);
+        setBounds({ first: r.first, last: r.last });
+        setRange([Math.max(r.first, r.last - DAY), r.last]);
+      } catch (e: any) {
+        if (!dead) setError(e.message);
       }
     })();
-  }, []);
+    return () => { dead = true; };
+  }, [apiKey, orgId, camera.id]);
 
-  const frames = useMemo(() => {
-    if (!allFrames || rangeStart == null || rangeEnd == null) return [];
-    return allFrames.filter((f) => f.ts >= rangeStart && f.ts <= rangeEnd);
-  }, [allFrames, rangeStart, rangeEnd]);
-
+  // 2. Frames for the selected range (debounced while the user drags dates).
   useEffect(() => {
-    if (index >= frames.length) setIndex(Math.max(0, frames.length - 1));
-  }, [frames.length, index]);
+    if (!range) return;
+    let dead = false;
+    const h = window.setTimeout(async () => {
+      try {
+        const r = await listFrames(apiKey, orgId, camera.id, range[0], range[1]);
+        if (dead) return;
+        setFrames(r.frames);
+        if (r.first != null && r.last != null) setBounds({ first: r.first, last: r.last });
+        const jump = pendingJump.current;
+        pendingJump.current = null;
+        setIndex(jump != null ? nearestIndex(r.frames, jump) : 0);
+      } catch (e: any) {
+        if (!dead) setError(e.message);
+      }
+    }, 250);
+    return () => { dead = true; window.clearTimeout(h); };
+  }, [apiKey, orgId, camera.id, range]);
 
+  // 3. Signed URLs for a window around the playhead.
   useEffect(() => {
-    if (frames.length === 0) return;
-    const w = 20;
-    const start = Math.max(0, index - 2);
-    const end = Math.min(frames.length, index + w);
-    const need = frames.slice(start, end).filter((f) => !urls[f.id]);
+    if (!frames?.length) return;
+    const need = frames
+      .slice(Math.max(0, index - 2), Math.min(frames.length, index + PREFETCH))
+      .map((f) => f.id)
+      .filter((id) => !urls[id] && !requested.current.has(id));
     if (need.length === 0) return;
-    (async () => {
-      const { data, error } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrls(need.map((f) => f.storage_path), SIGNED_URL_TTL_SEC);
-      if (error) {
-        setError(error.message);
-        return;
-      }
-      setUrls((prev) => {
-        const next = { ...prev };
-        data?.forEach((row, i) => {
-          if (row.signedUrl) next[need[i].id] = row.signedUrl;
-        });
-        return next;
+    need.forEach((id) => requested.current.add(id));
+    signFrames(apiKey, orgId, camera.id, need)
+      .then((got) => setUrls((prev) => ({ ...prev, ...got })))
+      .catch((e) => {
+        need.forEach((id) => requested.current.delete(id));
+        setError(e.message);
       });
-    })();
-  }, [frames, index, urls]);
+  }, [apiKey, orgId, camera.id, frames, index, urls]);
+
+  // 4. The room's sensors, from Growlink.
+  useEffect(() => {
+    let dead = false;
+    getSensors(apiKey, camera.roomId)
+      .then((list) => {
+        if (dead) return;
+        const meta = toSensorMeta(list);
+        setSensors(meta);
+        setVisible(defaultVisible(meta));
+      })
+      .catch((e) => !dead && setSensorError(e.message));
+    return () => { dead = true; };
+  }, [apiKey, camera.roomId]);
+
+  // 5. Sensor history for visible sensors over the range.
+  useEffect(() => {
+    if (!range || visible.size === 0) return setSeries(null);
+    const req = sensors.filter((s) => visible.has(s.id));
+    if (req.length === 0) return;
+    let dead = false;
+    getSensorChart(apiKey, orgId, req.map((s) => s.id), range[0], range[1])
+      .then((chart) => {
+        if (dead) return;
+        const { series, units } = seriesFromChart(chart, req);
+        setSeries(series);
+        setSensors((prev) => prev.map((s) => (units[s.id] !== undefined ? { ...s, unit: units[s.id] } : s)));
+        setNights(nightsFrom(chart.dayNight, range[0], range[1]));
+        setSensorError(null);
+      })
+      .catch((e) => !dead && setSensorError(e.message));
+    return () => { dead = true; };
+    // sensors is intentionally omitted: unit updates above would refetch forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey, orgId, range, visible, sensors.length]);
 
   useEffect(() => {
-    if (!playing || frames.length === 0) return;
+    if (!playing || !frames?.length) return;
     timer.current = window.setInterval(() => {
       setIndex((i) => (i + 1 >= frames.length ? 0 : i + 1));
     }, 1000 / fps);
-    return () => {
-      if (timer.current) window.clearInterval(timer.current);
-    };
-  }, [playing, fps, frames.length]);
+    return () => { if (timer.current) window.clearInterval(timer.current); };
+  }, [playing, fps, frames]);
 
-  const frameTs = useMemo(() => frames.map((f) => f.ts), [frames]);
-  const series: Series | null = useMemo(
-    () => (frameTs.length ? generateFakeSeries(frameTs) : null),
-    [frameTs]
-  );
-
-  const allFrameTs = useMemo(() => allFrames?.map((f) => f.ts) ?? [], [allFrames]);
-  const allSeries: Series | null = useMemo(
-    () => (allFrameTs.length ? generateFakeSeries(allFrameTs) : null),
-    [allFrameTs]
-  );
   const journal: JournalEntry[] = useMemo(
-    () => (allFrames ? buildPlaceholderJournal(allFrames, allSeries) : []),
-    [allFrames, allSeries]
+    () => buildPlaceholderJournal(frames ?? [], series, sensors),
+    [frames, series, sensors]
   );
 
-  const current = frames[index];
+  const current = frames?.[index];
   const currentUrl = current ? urls[current.id] : undefined;
   const tNow = current ? current.ts : null;
-  const label = useMemo(
-    () => (current ? new Date(current.captured_at).toLocaleString() : ""),
-    [current]
-  );
-
-  const jumpValue = useMemo(() => {
-    if (!current) return "";
-    const d = new Date(current.ts);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }, [current]);
+  const label = current ? new Date(current.ts).toLocaleString() : "";
+  const jumpValue = current ? toLocalInput(current.ts) : "";
 
   const jumpToTs = (ts: number) => {
-    if (!allFrames || allFrames.length === 0) return;
-    if (rangeStart == null || rangeEnd == null || ts < rangeStart || ts > rangeEnd) {
-      setRangeStart(allFrames[0].ts);
-      setRangeEnd(allFrames[allFrames.length - 1].ts);
-    }
-    let lo = 0, hi = allFrames.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (allFrames[mid].ts < ts) lo = mid + 1;
-      else hi = mid;
-    }
-    const cand = [allFrames[Math.max(0, lo - 1)], allFrames[lo]];
-    const bestGlobal = Math.abs(cand[0].ts - ts) < Math.abs(cand[1].ts - ts) ? lo - 1 : lo;
-    const target = allFrames[Math.max(0, bestGlobal)];
-    const idxInVisible = frames.findIndex((f) => f.id === target.id);
-    setIndex(idxInVisible >= 0 ? idxInVisible : 0);
     setPlaying(false);
+    if (!bounds) return;
+    if (range && ts >= range[0] && ts <= range[1] && frames) {
+      setIndex(nearestIndex(frames, ts));
+      return;
+    }
+    pendingJump.current = ts;
+    setRange([Math.max(bounds.first, ts - DAY / 2), Math.min(bounds.last, ts + DAY / 2)]);
   };
 
-  const handleJump = (iso: string) => {
-    const ms = new Date(iso).getTime();
-    if (Number.isFinite(ms)) jumpToTs(ms);
-  };
-
-  const toggle = (k: SensorKey) => {
+  const toggle = (id: string) =>
     setVisible((prev) => {
       const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-  };
 
   const askNova = async (text: string) => {
-    const userTurn: ChatTurn = { role: "user", text, ts: Date.now() };
-    setChat((c) => [...c, userTurn]);
+    setChat((c) => [...c, { role: "user", text, ts: Date.now() }]);
     setThinking(true);
     const reply = await placeholderAsk(text);
     setChat((c) => [...c, { role: "nova", text: reply, ts: Date.now() }]);
     setThinking(false);
   };
 
-  if (error) return <Centered>error: {error}</Centered>;
-  if (!allFrames) return <Centered>loading…</Centered>;
-  if (allFrames.length === 0)
-    return <Centered>no frames yet — let the capture script run for a bit</Centered>;
-
-  const dataMin = allFrames[0].ts;
-  const dataMax = allFrames[allFrames.length - 1].ts;
-
-  return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 500, flex: 1 }}>
-          Plant Health Timelapse
-        </h1>
-        <button onClick={() => setNovaOpen(true)} style={novaBtn} aria-label="Open Nova AI">
-          <span aria-hidden style={{ marginRight: 8 }}>◆</span>
-          Nova AI
-        </button>
+  const header = (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+      <button onClick={onBack} style={btn} aria-label="Back to cameras">← Cameras</button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 500 }}>{camera.name}</h1>
+        <div style={{ fontSize: 12, color: "#888" }}>
+          {roomName}
+          {camera.lastFrameAt && ` · last frame ${new Date(camera.lastFrameAt).toLocaleString()}`}
+        </div>
       </div>
+      <button onClick={() => setNovaOpen(true)} style={novaBtn} aria-label="Open Nova AI">
+        <span aria-hidden style={{ marginRight: 8 }}>◆</span>
+        Nova AI
+      </button>
+    </div>
+  );
 
+  const shell = (body: React.ReactNode) => (
+    <div style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
+      {header}
+      {body}
+    </div>
+  );
+
+  if (error) return shell(<Note>Error: {error}</Note>);
+  if (bounds === undefined) return shell(<Note>Loading…</Note>);
+  if (bounds === null)
+    return shell(
+      <Note>
+        No frames yet. Once the camera is plugged in and online, the first frame arrives within{" "}
+        {Math.round(camera.intervalSec / 60)} minutes.
+      </Note>
+    );
+
+  return shell(
+    <>
       <TimeRangeBar
-        dataMin={dataMin}
-        dataMax={dataMax}
-        rangeStart={rangeStart ?? dataMin}
-        rangeEnd={rangeEnd ?? dataMax}
-        onRangeChange={(s, e) => {
-          setRangeStart(s);
-          setRangeEnd(e);
-        }}
+        dataMin={bounds.first}
+        dataMax={bounds.last}
+        rangeStart={range?.[0] ?? bounds.first}
+        rangeEnd={range?.[1] ?? bounds.last}
+        onRangeChange={(s, e) => setRange([s, e])}
         jumpValue={jumpValue}
-        onJump={handleJump}
-        countShown={frames.length}
-        countTotal={allFrames.length}
+        onJump={(iso) => {
+          const ms = new Date(iso).getTime();
+          if (Number.isFinite(ms)) jumpToTs(ms);
+        }}
+        countShown={frames?.length ?? 0}
       />
 
-      {/* Readouts above the video, full width, wrapping as needed */}
       <div style={{ marginBottom: 12 }}>
-        <SensorReadouts series={series} t={tNow} visible={visible} />
+        <SensorReadouts sensors={sensors} series={series} t={tNow} visible={visible} />
       </div>
 
-      {/* Full-width video */}
       <div
         style={{
           position: "relative",
@@ -232,14 +258,12 @@ export default function Player() {
           justifyContent: "center",
         }}
       >
-        {frames.length === 0 ? (
+        {frames == null ? (
+          <span style={{ color: "#888" }}>loading…</span>
+        ) : frames.length === 0 ? (
           <span style={{ color: "#888" }}>no frames in this range</span>
         ) : currentUrl ? (
-          <img
-            src={currentUrl}
-            alt={label}
-            style={{ width: "100%", height: "100%", objectFit: "contain" }}
-          />
+          <img src={currentUrl} alt={label} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
         ) : (
           <span style={{ color: "#888" }}>loading frame…</span>
         )}
@@ -261,26 +285,21 @@ export default function Player() {
         )}
       </div>
 
-      {/* Transport */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-        <button
-          onClick={() => setPlaying((p) => !p)}
-          disabled={frames.length === 0}
-          style={btn}
-        >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+        <button onClick={() => setPlaying((p) => !p)} disabled={!frames?.length} style={btn}>
           {playing ? "Pause" : "Play"}
         </button>
         <input
           type="range"
           min={0}
-          max={Math.max(0, frames.length - 1)}
+          max={Math.max(0, (frames?.length ?? 1) - 1)}
           value={index}
           onChange={(e) => setIndex(Number(e.target.value))}
-          disabled={frames.length === 0}
-          style={{ flex: 1 }}
+          disabled={!frames?.length}
+          style={{ flex: 1, minWidth: 120 }}
         />
         <span style={{ fontVariantNumeric: "tabular-nums", fontSize: 13, color: "#aaa" }}>
-          {frames.length === 0 ? "0 / 0" : `${index + 1} / ${frames.length}`}
+          {frames?.length ? `${index + 1} / ${frames.length}` : "0 / 0"}
         </span>
         <label style={{ fontSize: 13, color: "#aaa" }}>
           {fps} fps
@@ -295,20 +314,18 @@ export default function Player() {
         </label>
       </div>
 
-      <SensorToggles visible={visible} onToggle={toggle} />
+      <SensorToggles sensors={sensors} visible={visible} onToggle={toggle} />
+      {sensorError && <p style={{ color: "#e24b4a", fontSize: 12 }}>Sensor data: {sensorError}</p>}
 
       <SensorCharts
+        sensors={sensors}
         series={series}
+        nights={nights}
         visible={visible}
         tNow={tNow}
-        tMin={frameTs[0] ?? null}
-        tMax={frameTs[frameTs.length - 1] ?? null}
+        tMin={range?.[0] ?? null}
+        tMax={range?.[1] ?? null}
       />
-
-      <p style={{ color: "#555", fontSize: 11, marginTop: 24 }}>
-        Sensor data and Nova entries shown are placeholder. The Growlink and Claude integrations
-        will replace them without changing this view.
-      </p>
 
       <NovaDrawer
         open={novaOpen}
@@ -322,8 +339,41 @@ export default function Player() {
           setNovaOpen(false);
         }}
       />
-    </div>
+    </>
   );
+}
+
+function nearestIndex(frames: Frame[], ts: number) {
+  if (!frames.length) return 0;
+  let lo = 0, hi = frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].ts < ts) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo > 0 && Math.abs(frames[lo - 1].ts - ts) < Math.abs(frames[lo].ts - ts) ? lo - 1 : lo;
+}
+
+// Growlink day/night markers: y=1 starts a day, y=0 starts a night.
+function nightsFrom(markers: { x: string; y: number }[], start: number, end: number): [number, number][] {
+  const pts = markers.map((m) => ({ t: new Date(m.x).getTime(), day: m.y === 1 })).sort((a, b) => a.t - b.t);
+  const out: [number, number][] = [];
+  let nightStart: number | null = pts.length && pts[0].day ? start : null;
+  for (const p of pts) {
+    if (!p.day && nightStart == null) nightStart = p.t;
+    else if (p.day && nightStart != null) {
+      out.push([nightStart, p.t]);
+      nightStart = null;
+    }
+  }
+  if (nightStart != null) out.push([nightStart, end]);
+  return out;
+}
+
+function toLocalInput(ms: number) {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 const btn: React.CSSProperties = {
@@ -348,10 +398,6 @@ const novaBtn: React.CSSProperties = {
   alignItems: "center",
 };
 
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ height: "100vh", display: "grid", placeItems: "center", color: "#888" }}>
-      {children}
-    </div>
-  );
+function Note({ children }: { children: React.ReactNode }) {
+  return <div style={{ padding: "48px 0", textAlign: "center", color: "#888" }}>{children}</div>;
 }

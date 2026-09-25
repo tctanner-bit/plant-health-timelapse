@@ -1,22 +1,26 @@
 "use client";
 
-import { SENSORS, SensorKey } from "../lib/sensors";
+import { SensorMeta } from "../lib/sensors";
 
 export default function SensorToggles({
+  sensors,
   visible,
   onToggle,
 }: {
-  visible: Set<SensorKey>;
-  onToggle: (k: SensorKey) => void;
+  sensors: SensorMeta[];
+  visible: Set<string>;
+  onToggle: (id: string) => void;
 }) {
+  if (sensors.length === 0) return null;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 16 }}>
-      {SENSORS.map((s) => {
-        const on = visible.has(s.key);
+      {sensors.map((s) => {
+        const on = visible.has(s.id);
         return (
           <button
-            key={s.key}
-            onClick={() => onToggle(s.key)}
+            key={s.id}
+            onClick={() => onToggle(s.id)}
+            title={s.label}
             style={{
               fontSize: 12,
               padding: "4px 10px",
@@ -29,7 +33,7 @@ export default function SensorToggles({
             aria-pressed={on}
           >
             <span style={{ color: s.color, marginRight: 6 }}>●</span>
-            {s.short}
+            {s.label}
           </button>
         );
       })}

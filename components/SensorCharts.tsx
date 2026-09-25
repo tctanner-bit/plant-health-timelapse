@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
-import { SENSORS, SensorKey, Series } from "../lib/sensors";
+import { SensorMeta, Series, fmt } from "../lib/sensors";
 
 // Simple SVG line chart per sensor with a shared time axis and a moving
-// playhead. Charts share the same x-domain (frame timestamps), so the
-// playhead lines up across rows.
+// playhead. Charts share the same x-domain (the selected range), so the
+// playhead lines up across rows. Night periods from Growlink are shaded.
 
 const W = 1060;
 const H = 70;
@@ -15,47 +14,49 @@ const PAD_T = 6;
 const PAD_B = 14;
 
 export default function SensorCharts({
+  sensors,
   series,
+  nights,
   visible,
   tNow,
   tMin,
   tMax,
 }: {
+  sensors: SensorMeta[];
   series: Series | null;
-  visible: Set<SensorKey>;
+  nights: [number, number][];
+  visible: Set<string>;
   tNow: number | null;
   tMin: number | null;
   tMax: number | null;
 }) {
   if (!series || tMin == null || tMax == null) return null;
   const span = Math.max(1, tMax - tMin);
-  const xOf = (t: number) => PAD_L + ((t - tMin) / span) * (W - PAD_L - PAD_R);
+  const xOf = (t: number) => PAD_L + ((Math.min(tMax, Math.max(tMin, t)) - tMin) / span) * (W - PAD_L - PAD_R);
   const playX = tNow != null ? xOf(tNow) : null;
-  const shown = SENSORS.filter((s) => visible.has(s.key));
+  const shown = sensors.filter((s) => visible.has(s.id));
 
   return (
     <div style={{ marginTop: 16 }}>
       {shown.map((s) => {
-        const data = series[s.key];
+        const data = (series[s.id] ?? []).filter((p) => p.t >= tMin && p.t <= tMax);
         const ys = data.map((d) => d.v);
-        const yMin = Math.min(...ys);
-        const yMax = Math.max(...ys);
+        const yMin = ys.length ? Math.min(...ys) : 0;
+        const yMax = ys.length ? Math.max(...ys) : 1;
         const yRange = yMax - yMin || 1;
-        const yOf = (v: number) =>
-          PAD_T + (1 - (v - yMin) / yRange) * (H - PAD_T - PAD_B);
+        const yOf = (v: number) => PAD_T + (1 - (v - yMin) / yRange) * (H - PAD_T - PAD_B);
 
         const d = data
           .map((p, i) => `${i === 0 ? "M" : "L"}${xOf(p.t).toFixed(1)},${yOf(p.v).toFixed(1)}`)
           .join(" ");
-
         const lastV = data[data.length - 1]?.v;
 
         return (
           <div
-            key={s.key}
+            key={s.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "120px 1fr",
+              gridTemplateColumns: "140px 1fr",
               gap: 12,
               alignItems: "center",
               padding: "6px 0",
@@ -65,10 +66,15 @@ export default function SensorCharts({
             <div>
               <div style={{ fontSize: 12, color: "#aaa" }}>{s.label}</div>
               <div style={{ fontSize: 11, color: "#666" }}>
-                {yMin.toFixed(s.decimals)}–{yMax.toFixed(s.decimals)} {s.unit}
+                {ys.length ? `${fmt(yMin)}–${fmt(yMax)} ${s.unit}` : "no data in range"}
               </div>
             </div>
             <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+              {nights.map(([a, b], i) =>
+                b < tMin || a > tMax ? null : (
+                  <rect key={i} x={xOf(a)} y={PAD_T} width={Math.max(0, xOf(b) - xOf(a))} height={H - PAD_T - PAD_B} fill="#000" fillOpacity={0.35} />
+                )
+              )}
               <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} stroke="#222" strokeWidth={0.5} />
               <path d={d} fill="none" stroke={s.color} strokeWidth={1.25} />
               {playX != null && (
@@ -76,7 +82,7 @@ export default function SensorCharts({
               )}
               {lastV != null && (
                 <text x={W - PAD_R} y={PAD_T + 10} textAnchor="end" fontSize={10} fill="#666">
-                  last {lastV.toFixed(s.decimals)} {s.unit}
+                  last {fmt(lastV)} {s.unit}
                 </text>
               )}
             </svg>

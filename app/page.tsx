@@ -1,7 +1,5 @@
-import Player from "../components/Player";
-
-export const dynamic = "force-dynamic"; // always fetch the latest list of frames
+import App from "../components/App";
 
 export default function Page() {
-  return <Player />;
+  return <App />;
 }

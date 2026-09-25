@@ -23,7 +23,7 @@ export default function TimeRangeBar({
   jumpValue: string;          // "yyyy-MM-ddTHH:mm" of current frame, for the Jump input
   onJump: (iso: string) => void;
   countShown: number;
-  countTotal: number;
+  countTotal?: number;
 }) {
   // Convert a ms timestamp to the value an <input type="datetime-local"> wants.
   // datetime-local uses LOCAL time, no timezone suffix.
@@ -116,7 +116,7 @@ export default function TimeRangeBar({
       </Field>
 
       <span style={{ fontSize: 12, color: "#888", fontVariantNumeric: "tabular-nums" }}>
-        {countShown} of {countTotal} frames
+        {countTotal == null ? `${countShown} frames` : `${countShown} of ${countTotal} frames`}
       </span>
     </div>
   );

@@ -1,111 +1,93 @@
-// Placeholder sensor data. Generates a believable 24-hour curve for each
-// channel, sampled at the same instants as the frames. When Growlink is
-// wired in, replace `generateFakeSeries` with a real fetch; the shape
-// (timestamp + value per channel) stays the same.
+// Real sensor data from Growlink, shaped for the player: one series of
+// { t, v } per sensor, keyed by sensor id. Units arrive already converted by
+// the Growlink API (Uom-* headers), so nothing here does unit math.
 
-export type SensorKey =
-  | "air_temp"
-  | "humidity"
-  | "vpd"
-  | "co2"
-  | "par"
-  | "leaf_temp"
-  | "sub_moisture"
-  | "sub_ec"
-  | "root_temp";
+import { ChartResponse, METRIC_LABELS, Sensor, sameId } from "./growlink";
 
 export type SensorMeta = {
-  key: SensorKey;
-  label: string;
-  short: string;
-  unit: string;
-  decimals: number;
+  id: string;           // Growlink sensor id, lowercased
+  label: string;        // sensor name as configured in Growlink
+  short: string;        // metric label for chips
+  metric: number;
+  unit: string;         // filled in from the chart response
   color: string;
-  group: "air" | "light" | "substrate";
 };
 
-export const SENSORS: SensorMeta[] = [
-  { key: "air_temp",     label: "Air temperature",   short: "Temp", unit: "°F",    decimals: 1, color: "#ef9f27", group: "air" },
-  { key: "humidity",     label: "Relative humidity", short: "RH",   unit: "%",     decimals: 0, color: "#378add", group: "air" },
-  { key: "vpd",          label: "VPD",               short: "VPD",  unit: "kPa",   decimals: 2, color: "#7f77dd", group: "air" },
-  { key: "co2",          label: "CO\u2082",          short: "CO\u2082", unit: "ppm", decimals: 0, color: "#b4b2a9", group: "air" },
-  { key: "par",          label: "PAR (light)",       short: "PAR",  unit: "\u00b5mol", decimals: 0, color: "#97c459", group: "light" },
-  { key: "leaf_temp",    label: "Leaf temperature",  short: "Leaf", unit: "°F",    decimals: 1, color: "#d85a30", group: "air" },
-  { key: "sub_moisture", label: "Substrate moisture", short: "WC",  unit: "%",     decimals: 1, color: "#1d9e75", group: "substrate" },
-  { key: "sub_ec",       label: "Substrate EC",      short: "EC",   unit: "mS/cm", decimals: 2, color: "#d4537e", group: "substrate" },
-  { key: "root_temp",    label: "Root-zone temp",    short: "Root", unit: "°F",    decimals: 1, color: "#e24b4a", group: "substrate" },
+export type Reading = { t: number; v: number };
+export type Series = Record<string, Reading[]>;
+
+const PALETTE = [
+  "#ef9f27", "#378add", "#7f77dd", "#97c459", "#1d9e75",
+  "#d4537e", "#e24b4a", "#d85a30", "#5dcaa5", "#b4b2a9",
 ];
 
-export type Reading = { t: number; v: number };
-export type Series = Record<SensorKey, Reading[]>;
+// Metrics that matter most for plant health, in the order we pick defaults.
+const DEFAULT_METRICS = [0, 1, 8, 20, 6, 9, 3];
 
-function hash(t: number, salt: number) {
-  const x = Math.sin(t * 0.0001 + salt * 7.13) * 43758.5453;
-  return x - Math.floor(x);
+export function toSensorMeta(sensors: Sensor[]): SensorMeta[] {
+  const sorted = [...sensors].sort(
+    (a, b) => a.metric - b.metric || a.name.localeCompare(b.name)
+  );
+  // Colors assigned on the full sorted list so they survive toggling.
+  return sorted.map((s, i) => ({
+    id: s.id.toLowerCase(),
+    label: s.name,
+    short: METRIC_LABELS[s.metric] ?? s.name,
+    metric: s.metric,
+    unit: "",
+    color: PALETTE[i % PALETTE.length],
+  }));
 }
 
-function tod(ts: number) {
-  const d = new Date(ts);
-  return (d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600) / 24;
-}
-
-function lightsOn(ts: number) {
-  const h = tod(ts) * 24;
-  return h >= 6 && h < 22;
-}
-
-function valueFor(key: SensorKey, ts: number): number {
-  const h = tod(ts) * 24;
-  const wave = Math.sin(((h - 6) / 24) * Math.PI * 2);
-  const lit = lightsOn(ts);
-  const drift = hash(ts, key.length) * 2 - 1;
-
-  switch (key) {
-    case "air_temp":
-      return (lit ? 76 : 68) + wave * 3 + drift * 0.6;
-    case "humidity":
-      return (lit ? 58 : 68) - wave * 4 + drift * 1.5;
-    case "vpd": {
-      const tF = (lit ? 76 : 68) + wave * 3;
-      const rh = (lit ? 58 : 68) - wave * 4;
-      const tC = ((tF - 32) * 5) / 9;
-      const es = 0.61078 * Math.exp((17.27 * tC) / (tC + 237.3));
-      return Math.max(0, es * (1 - rh / 100) + drift * 0.03);
-    }
-    case "co2":
-      return (lit ? 1000 : 450) + wave * 80 + drift * 30;
-    case "par":
-      return lit ? Math.max(0, 900 + wave * 200 + drift * 40) : 0;
-    case "leaf_temp":
-      return (lit ? 74 : 67) + wave * 2.5 + drift * 0.5;
-    case "sub_moisture": {
-      const pulse = lit && Math.floor(h * 0.5) % 1 === 0 ? Math.max(0, 4 - (h % 2) * 3) : 0;
-      return 62 + pulse + drift * 0.4;
-    }
-    case "sub_ec":
-      return 3.0 + wave * 0.2 + drift * 0.05;
-    case "root_temp":
-      return 70 + wave * 1.5 + drift * 0.3;
+// One sensor per headline metric, up to five.
+export function defaultVisible(meta: SensorMeta[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of DEFAULT_METRICS) {
+    const s = meta.find((x) => x.metric === m);
+    if (s) out.add(s.id);
+    if (out.size >= 5) break;
   }
-}
-
-export function generateFakeSeries(frameTimestamps: number[]): Series {
-  const out = {} as Series;
-  for (const s of SENSORS) {
-    out[s.key] = frameTimestamps.map((t) => ({ t, v: valueFor(s.key, t) }));
-  }
+  if (out.size === 0) meta.slice(0, 3).forEach((s) => out.add(s.id));
   return out;
 }
 
-export function readingAt(series: Reading[], t: number): number | null {
-  if (!series.length) return null;
+// The chart response doesn't promise a sensor id per series, so match by id if
+// present, then by name, then fall back to request order.
+export function seriesFromChart(
+  chart: ChartResponse,
+  requested: SensorMeta[]
+): { series: Series; units: Record<string, string> } {
+  const series: Series = {};
+  const units: Record<string, string> = {};
+  chart.series.forEach((s, i) => {
+    const m =
+      requested.find((r) => sameId(r.id, s.sensorId)) ??
+      requested.find((r) => r.label === s.name) ??
+      requested[i];
+    if (!m) return;
+    series[m.id] = s.data
+      .filter((p) => p.y != null)
+      .map((p) => ({ t: new Date(p.x).getTime(), v: p.y as number }))
+      .sort((a, b) => a.t - b.t);
+    units[m.id] = s.unit ?? "";
+  });
+  return { series, units };
+}
+
+// Most recent reading at or before t. Sensors report on their own time grid,
+// so "nearest" could show a value from the future relative to the frame.
+export function readingAt(series: Reading[] | undefined, t: number): number | null {
+  if (!series?.length || series[0].t > t) return null;
   let lo = 0, hi = series.length - 1;
   while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (series[mid].t < t) lo = mid + 1;
-    else hi = mid;
+    const mid = (lo + hi + 1) >> 1;
+    if (series[mid].t <= t) lo = mid;
+    else hi = mid - 1;
   }
-  const a = series[Math.max(0, lo - 1)];
-  const b = series[lo];
-  return Math.abs(a.t - t) < Math.abs(b.t - t) ? a.v : b.v;
+  return series[lo].v;
+}
+
+export function fmt(v: number): string {
+  const a = Math.abs(v);
+  return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
 }

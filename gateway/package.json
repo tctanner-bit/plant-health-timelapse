@@ -1,0 +1,16 @@
+{
+  "name": "phc-ftp-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FTPS front door for plug-and-play Reolink cameras. Forwards each uploaded JPEG to the ingest-frame edge function.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ftp-srv": "^4.6.3"
+  }
+}
