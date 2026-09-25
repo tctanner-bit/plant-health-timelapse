@@ -43,7 +43,7 @@ fly secrets set PASV_URL=<the IPv4> -a phc-ftp
 fly deploy --ha=false --remote-only
 ```
 
-Right after a deploy, Fly warns that nothing is listening on port 30000.
+Right after a deploy, Fly warns that nothing is listening on ports 30000–30009.
 That's expected: passive ports open only for the length of an upload.
 
 - **Dedicated IPv4 (about $2/month):** raw TCP services need one.

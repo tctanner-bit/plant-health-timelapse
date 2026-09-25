@@ -1,12 +1,6 @@
 # FTPS gateway for plug-and-play cameras.
 #
-# One-time setup (see gateway/README.md):
-#   fly launch --no-deploy --copy-config --name phc-ftp
-#   fly ips allocate-v4            # dedicated IPv4: raw TCP needs one
-#   fly secrets set PASV_URL=<that IPv4>
-#   fly deploy
-#   fly scale count 1              # passive data connections must reach the
-#                                  # same machine as the control connection
+# Setup and redeploy steps: gateway/README.md
 
 app = "phc-ftp"
 primary_region = "iad"
@@ -34,16 +28,78 @@ primary_region = "iad"
     timeout = "5s"
     grace_period = "10s"
 
-# Passive data ports. With a port range, each external port maps to the same
-# internal port number.
+# Passive data ports, one service each. Fly forwards a port range to a single
+# internal_port, but the gateway tells each camera an exact port to dial, so
+# every external port must land on the same internal port number.
 [[services]]
   protocol = "tcp"
   internal_port = 30000
   auto_stop_machines = "off"
-
   [[services.ports]]
-    start_port = 30000
-    end_port = 30009
+    port = 30000
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30001
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30001
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30002
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30002
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30003
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30003
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30004
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30004
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30005
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30005
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30006
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30006
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30007
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30007
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30008
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30008
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 30009
+  auto_stop_machines = "off"
+  [[services.ports]]
+    port = 30009
 
 [[vm]]
   size = "shared-cpu-1x"
