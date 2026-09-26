@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Camera, LatestFrame, LatestInsight, latestFrames, latestInsights } from "../lib/api";
 import { LiveReading, Room, Sensor, getLiveSensors, getSensors } from "../lib/growlink";
 import { SensorMeta, configuredSensors, displayRows, fmt } from "../lib/sensors";
@@ -35,7 +35,6 @@ export default function FacilityView({
   rooms,
   cameras,
   onOpen,
-  onRefreshCameras,
   onAddCamera,
 }: {
   apiKey: string;
@@ -43,7 +42,6 @@ export default function FacilityView({
   rooms: Room[];
   cameras: Camera[];
   onOpen: (cameraId: string) => void;
-  onRefreshCameras: () => Promise<void>;
   onAddCamera: () => void;
 }) {
   const [latest, setLatest] = useState<Record<string, LatestFrame>>({});
@@ -89,11 +87,7 @@ export default function FacilityView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey, neededRooms.join()]);
 
-  // Latest frames (and camera status) every minute. The parent's refresh
-  // callback is read through a ref so a new function identity never restarts
-  // the polling loop.
-  const refreshRef = useRef(onRefreshCameras);
-  refreshRef.current = onRefreshCameras;
+  // Latest frames and Nova flags every minute (camera status refreshes app-wide).
   const pollFrames = useCallback(async () => {
     try {
       const got = await latestFrames(apiKey, orgId);
@@ -104,7 +98,6 @@ export default function FacilityView({
       });
     } catch {}
     latestInsights(apiKey, orgId).then(setNova).catch(() => {});
-    refreshRef.current();
   }, [apiKey, orgId]);
 
   // Live readings for every configured sensor in the facility, every 30s.

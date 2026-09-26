@@ -83,6 +83,19 @@ export default function App() {
     } catch {}
   }, [apiKey, orgId]);
 
+  // Keep camera status (online/offline, last frame) current on every screen,
+  // not just the one that happened to load it: once a minute while visible.
+  useEffect(() => {
+    if (!apiKey || !orgId) return;
+    const tick = () => document.visibilityState === "visible" && refreshCameras();
+    const t = window.setInterval(tick, 60_000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [apiKey, orgId, refreshCameras]);
+
   useEffect(() => {
     setRooms(null);
     setCameras(null);
@@ -157,7 +170,6 @@ export default function App() {
           rooms={rooms}
           cameras={cameras}
           onOpen={(id) => setCameraId(id)}
-          onRefreshCameras={refreshCameras}
           onAddCamera={() => { setView("cameras"); setClaiming(true); }}
         />
       ) : (

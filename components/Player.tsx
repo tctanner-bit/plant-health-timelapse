@@ -76,6 +76,9 @@ export default function Player({
   const timer = useRef<number | null>(null);
   const pendingJump = useRef<number | null>(null);
   const requested = useRef<Set<number>>(new Set());
+  // Set when live updates extend the range themselves, so effect 2 doesn't
+  // refetch the whole range and jump the playhead.
+  const appendOnly = useRef(false);
 
   // 1. Camera history bounds → default to the most recent day.
   useEffect(() => {
@@ -97,6 +100,10 @@ export default function Player({
   // 2. Frames for the selected range (debounced while the user drags dates).
   useEffect(() => {
     if (!range) return;
+    if (appendOnly.current) {
+      appendOnly.current = false;
+      return;
+    }
     let dead = false;
     const h = window.setTimeout(async () => {
       try {
@@ -113,6 +120,48 @@ export default function Player({
     }, 250);
     return () => { dead = true; window.clearTimeout(h); };
   }, [apiKey, orgId, camera.id, range]);
+
+  // 2b. Live: check for new frames every minute. When the selected range ends
+  // at the newest frame (the default), new frames are appended and, if you're
+  // parked on the last frame, the playhead moves to the newest one.
+  const liveState = useRef({ frames, index, range, bounds, playing });
+  liveState.current = { frames, index, range, bounds, playing };
+  useEffect(() => {
+    let busy = false;
+    const tick = async () => {
+      const cur = liveState.current;
+      if (busy || document.visibilityState !== "visible" || !cur.bounds || !cur.range || !cur.frames) return;
+      busy = true;
+      try {
+        const lastKnown = cur.bounds.last;
+        const r = await listFrames(apiKey, orgId, camera.id, lastKnown + 1, Date.now() + 60_000);
+        const fresh = r.frames.filter((f) => f.ts > lastKnown);
+        if (!fresh.length) return;
+        const newest = fresh[fresh.length - 1].ts;
+        const now = liveState.current;
+        setBounds((b) => (b ? { ...b, last: Math.max(b.last, newest) } : b));
+        if (now.range && now.frames && now.range[1] >= lastKnown) {
+          const merged = [...now.frames, ...fresh.filter((f) => !now.frames!.some((x) => x.id === f.id))];
+          const atEnd = now.index >= now.frames.length - 1;
+          appendOnly.current = true;
+          setFrames(merged);
+          setRange([now.range[0], newest]);
+          if (atEnd && !now.playing) setIndex(merged.length - 1);
+        }
+      } catch {
+        // Try again next minute.
+      } finally {
+        busy = false;
+      }
+    };
+    const t = window.setInterval(tick, 60_000);
+    const onVis = () => document.visibilityState === "visible" && tick();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [apiKey, orgId, camera.id]);
 
   // 3. Signed URLs for a window around the playhead.
   useEffect(() => {
@@ -294,7 +343,8 @@ export default function Player({
         <h1 className="title" style={{ marginTop: 8 }}>{camera.name}</h1>
         <div className="subtitle">
           {roomName}
-          {camera.lastFrameAt && ` · last frame ${new Date(camera.lastFrameAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
+          {(bounds?.last ?? camera.lastFrameAt) &&
+            ` · last frame ${new Date(bounds?.last ?? camera.lastFrameAt!).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
         </div>
       </div>
       <button className="btn" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">Settings</button>
