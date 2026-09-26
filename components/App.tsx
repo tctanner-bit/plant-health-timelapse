@@ -15,6 +15,20 @@ import { Brand, Centered } from "./ui";
 
 type HomeView = "facility" | "cameras";
 
+// Screens embedded in Growlink stay open for days. When a newer deployment is
+// live, reload onto it (URL state and the session key survive a reload).
+const BUILD = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? null;
+let lastBuildCheck = 0;
+async function checkForNewBuild() {
+  if (!BUILD || Date.now() - lastBuildCheck < 5 * 60_000) return;
+  lastBuildCheck = Date.now();
+  try {
+    const r = await fetch("/api/version", { cache: "no-store" });
+    const { version } = await r.json();
+    if (version && version !== BUILD) window.location.reload();
+  } catch {}
+}
+
 export default function App() {
   const [apiKey, setApiKey] = useState<string | null | undefined>(undefined);
   const [orgs, setOrgs] = useState<Org[] | null>(null);
@@ -87,7 +101,11 @@ export default function App() {
   // not just the one that happened to load it: once a minute while visible.
   useEffect(() => {
     if (!apiKey || !orgId) return;
-    const tick = () => document.visibilityState === "visible" && refreshCameras();
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshCameras();
+      checkForNewBuild();
+    };
     const t = window.setInterval(tick, 60_000);
     document.addEventListener("visibilitychange", tick);
     return () => {

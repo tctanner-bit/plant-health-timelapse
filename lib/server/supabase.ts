@@ -15,7 +15,14 @@ export function db(): SupabaseClient {
     const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
-    client = createClient(url, key, { auth: { persistSession: false } });
+    // Next 14 caches server-side fetch() calls (GETs and POSTs alike) in its
+    // Data Cache, which outlives deployments on Vercel. Without no-store,
+    // "newest frame" and camera status queries kept returning one stale
+    // answer, and cached signed URLs expired into broken images.
+    client = createClient(url, key, {
+      auth: { persistSession: false },
+      global: { fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }) },
+    });
   }
   return client;
 }

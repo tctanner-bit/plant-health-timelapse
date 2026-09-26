@@ -105,7 +105,7 @@ export const signedInByBuilder = () => {
   try { return sessionStorage.getItem(FROM_BUILDER) === "1"; } catch { return false; }
 };
 
-export type LatestFrame = { id: number; ts: number; url: string };
+export type LatestFrame = { id: number; ts: number; url: string; fetchedAt?: number };
 
 // Every camera's newest frame, signed, in one call. Used by the facility view.
 export const latestFrames = (key: string, orgId: string) =>

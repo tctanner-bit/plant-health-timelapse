@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, LatestFrame, LatestInsight, latestFrames, latestInsights } from "../lib/api";
 import { LiveReading, Room, Sensor, getLiveSensors, getSensors } from "../lib/growlink";
 import { SensorMeta, configuredSensors, displayRows, fmt } from "../lib/sensors";
@@ -18,6 +18,7 @@ import { ago, cameraStatus } from "../lib/status";
 const LIVE_MS = 30_000;
 const FRAMES_MS = 60_000;
 const STALE_MS = 15 * 60_000;
+const URL_REFRESH_MS = 45 * 60_000;
 const MAX_READINGS = 6;
 
 // Compact labels for the small reading tiles (full names stay in the tooltip).
@@ -49,6 +50,7 @@ export default function FacilityView({
   const [live, setLive] = useState<Record<string, LiveReading>>({});
   const [nova, setNova] = useState<Record<string, LatestInsight>>({});
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [frameError, setFrameError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("room");
@@ -88,17 +90,40 @@ export default function FacilityView({
   }, [apiKey, neededRooms.join()]);
 
   // Latest frames and Nova flags every minute (camera status refreshes app-wide).
+  // Snapshot URLs are signed for an hour, so an unchanged frame gets a fresh
+  // URL after 45 minutes; a failed poll is shown, not silently skipped.
+  const framesBusy = useRef(false);
   const pollFrames = useCallback(async () => {
+    if (framesBusy.current) return;
+    framesBusy.current = true;
     try {
       const got = await latestFrames(apiKey, orgId);
+      const now = Date.now();
       setLatest((prev) => {
         const next: Record<string, LatestFrame> = {};
-        for (const [id, f] of Object.entries(got)) next[id] = prev[id]?.id === f.id ? prev[id] : f;
+        for (const [id, f] of Object.entries(got)) {
+          const old = prev[id];
+          next[id] = old && old.id === f.id && now - (old.fetchedAt ?? 0) < URL_REFRESH_MS ? old : { ...f, fetchedAt: now };
+        }
         return next;
       });
-    } catch {}
+      setFrameError(null);
+    } catch (e: any) {
+      setFrameError(e.message || "network error");
+    } finally {
+      framesBusy.current = false;
+    }
     latestInsights(apiKey, orgId).then(setNova).catch(() => {});
   }, [apiKey, orgId]);
+
+  // The camera list (refreshed app-wide) knows when a camera last sent a
+  // frame; if that's newer than the snapshot on screen, fetch it now.
+  const newestKnown = active.reduce((m, c) => Math.max(m, c.lastFrameAt ? Date.parse(c.lastFrameAt) : 0), 0);
+  const newestShown = Object.values(latest).reduce((m, f) => Math.max(m, f.ts), 0);
+  useEffect(() => {
+    if (newestKnown > newestShown + 1000) pollFrames();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newestKnown]);
 
   // Live readings for every configured sensor in the facility, every 30s.
   const sensorIds = useMemo(
@@ -177,8 +202,10 @@ export default function FacilityView({
           {counts.ok > 0 && <span className="status ok">{counts.ok} capturing</span>}
           {counts.alarm > 0 && <span className="status alarm">{counts.alarm} offline</span>}
           {counts.warn > 0 && <span className="status warn">{counts.warn} waiting</span>}
-          <span className="small" style={{ color: liveError ? "var(--warn)" : "var(--dim)" }}>
-            {liveError
+          <span className="small" style={{ color: liveError || frameError ? "var(--warn)" : "var(--dim)" }}>
+            {frameError
+              ? `Couldn't refresh snapshots (${frameError}) · retrying`
+              : liveError
               ? `Live readings paused: ${liveError}`
               : updatedAt
               ? `Readings updated ${ago(updatedAt)}`
@@ -218,6 +245,7 @@ export default function FacilityView({
               sensors={roomSensors[c.roomId]}
               live={live}
               onOpen={() => onOpen(c.id)}
+              onImageError={pollFrames}
             />
           ))}
         </div>
@@ -235,6 +263,7 @@ function RoomTile({
   sensors,
   live,
   onOpen,
+  onImageError,
 }: {
   camera: Camera;
   room: string;
@@ -244,6 +273,7 @@ function RoomTile({
   sensors?: Sensor[];
   live: Record<string, LiveReading>;
   onOpen: () => void;
+  onImageError: () => void;
 }) {
   const st = cameraStatus(c);
   const rows: SensorMeta[] = useMemo(
@@ -255,7 +285,7 @@ function RoomTile({
   return (
     <article className="room-tile">
       <button className="room-shot" onClick={onOpen} aria-label={`Open ${room} timelapse`}>
-        {frame ? <img src={frame.url} alt={`${room}, ${new Date(frame.ts).toLocaleTimeString()}`} loading="lazy" /> : <span>No snapshot yet</span>}
+        {frame ? <img src={frame.url} alt={`${room}, ${new Date(frame.ts).toLocaleTimeString()}`} loading="lazy" onError={onImageError} /> : <span>No snapshot yet</span>}
         <span className={`status ${st.tone} room-status`}>{st.label}</span>
         {frame && (
           <span className="room-stamp" style={{ color: frameAge! > 3 * c.intervalSec * 1000 ? "var(--warn)" : undefined }}>
