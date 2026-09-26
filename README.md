@@ -70,6 +70,8 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 |---|---|
 | `SUPABASE_URL` | Vercel, server only. `https://uqbfrvtiwxukqpaxczmq.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel, server only, **never** `NEXT_PUBLIC_`. Also needed at the warehouse for provisioning |
+| `STRIPE_SECRET_KEY` | Vercel, server only. Test key first; billing stays off (nobody locked out) until set |
+| `STRIPE_WEBHOOK_SECRET` | Vercel, server only. Printed once by `scripts/stripe-setup.mjs` |
 
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are left over
 from the prototype and unused now.
@@ -128,3 +130,35 @@ key:
 
 Without the key, Nova shows "Nova isn't configured on this server yet" and
 nothing else breaks.
+
+## Billing
+
+$19 per active camera per month through Stripe (Growlink's account), after
+a 30-day trial that needs no card. Nova is included, free during beta.
+
+- **org_billing** holds each org's trial, Stripe customer/subscription and
+  status; the webhook (`/api/stripe/webhook`) keeps it in step with Stripe,
+  re-reading the subscription on every event. Nothing on a page load calls
+  Stripe except the cached price lookup.
+- **Trial** starts the first time an org opens the app (row created on
+  first read). Adding a card during the trial saves it and first charges
+  when the trial ends.
+- **Camera count** follows the cameras: claim, revoke and support's
+  unclaim/revoke/reactivate update the subscription quantity, prorated.
+- **Access** (claiming cameras, frames, Nova) needs comp, an active trial,
+  or a trialing/active/past_due subscription; otherwise those routes return
+  402 and the app opens the Billing tab. Cameras keep uploading regardless.
+  Without `STRIPE_SECRET_KEY` nothing is enforced.
+- Checkout and the billing portal are Stripe-hosted and open in a new tab
+  (they refuse to load inside the Growlink frame); `/billing/done` is where
+  they return.
+- Support: fleet dashboard → Billing (make free, extend trial). Refunds and
+  cancellations are done in Stripe.
+
+Setup (test mode first, then again with the live key):
+
+    STRIPE_SECRET_KEY=sk_test_... node scripts/stripe-setup.mjs
+
+It creates the product, the `plant_health_camera_monthly` price, a billing
+portal configuration of its own and the webhook, and prints the webhook
+signing secret once.

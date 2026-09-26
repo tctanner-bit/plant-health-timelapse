@@ -337,3 +337,13 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .thumbs img { width: 100%; height: 100%; object-fit: cover; }
 .thumbs span { position: absolute; left: 4px; bottom: 4px; font-size: 10px; font-weight: 700; background: rgba(8, 11, 10, 0.75); padding: 1px 5px; border-radius: 3px; color: var(--text); }
 .secret { margin-top: 12px; padding: 12px; border: 1px dashed var(--ok); border-radius: var(--radius); background: var(--ok-tint); }
+
+/* ---------------------------------------------------------------- billing */
+.billing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin: 22px 0 18px; padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.billing-num { font-size: 26px; font-weight: 800; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.billing-points { margin: 0 0 14px; padding-left: 18px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.billing-alert { border-color: var(--alarm); color: var(--text); line-height: 1.5; }
+.billing-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 14px; }
+.billing-banner.warn { border-color: var(--warn); }
+.billing-banner.alarm { border-color: var(--alarm); }
+.beta-chip { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--ok); color: var(--ok); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; vertical-align: 1px; }

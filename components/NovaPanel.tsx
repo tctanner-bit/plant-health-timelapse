@@ -89,7 +89,9 @@ export default function NovaPanel({
         <div className="nova-head">
           <span className="nova-mark" aria-hidden>◆</span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 800, fontSize: 16 }}>Nova insights</div>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>
+              Nova insights <span className="beta-chip" title="Nova is included at no charge while it's in beta">Free during beta</span>
+            </div>
             <div className="small muted">Frames read against this room&apos;s sensor data</div>
           </div>
           <button className="btn icon ghost" onClick={onClose} aria-label="Close Nova">✕</button>

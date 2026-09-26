@@ -26,6 +26,16 @@ export type FramesResponse = {
   truncated: boolean;
 };
 
+// Errors carry the HTTP status; 402 means the org's trial ended unpaid.
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+// Screens listen for this to switch to the Billing tab.
+export const BILLING_REQUIRED_EVENT = "phai:billing-required";
+
 async function call<T>(apiKey: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(path, {
     method: init.method ?? "GET",
@@ -37,7 +47,10 @@ async function call<T>(apiKey: string, path: string, init: { method?: string; bo
     cache: "no-store",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 402 && typeof window !== "undefined") window.dispatchEvent(new Event(BILLING_REQUIRED_EVENT));
+    throw new ApiError(data.error ?? `HTTP ${res.status}`, res.status);
+  }
   return data as T;
 }
 
@@ -177,3 +190,31 @@ export const requestRangeInsight = (
 
 export const latestInsights = (key: string, orgId: string) =>
   call<{ latest: Record<string, LatestInsight> }>(key, `/api/orgs/${orgId}/insights/latest`).then((r) => r.latest);
+
+// ------------------------------------------------------------------ billing
+
+export type Billing = {
+  entitled: boolean;
+  state: "comp" | "trial" | "subscribed" | "past_due" | "expired";
+  trialEndsAt: number;
+  daysLeft: number | null;
+  configured: boolean;
+  trialDays: number;
+  cameras: number;
+  price: { unitAmount: number; currency: string } | null;
+  subscription: {
+    status: string | null;
+    quantity: number | null;
+    currentPeriodEnd: number | null;
+    cancelAtPeriodEnd: boolean;
+  } | null;
+  canManage: boolean;
+};
+
+export const getBilling = (key: string, orgId: string) => call<Billing>(key, `/api/orgs/${orgId}/billing`);
+
+// Both return a Stripe-hosted URL, opened in a new tab.
+export const startCheckout = (key: string, orgId: string) =>
+  call<{ url: string }>(key, `/api/orgs/${orgId}/billing/checkout`, { method: "POST", body: {} }).then((r) => r.url);
+export const openBillingPortal = (key: string, orgId: string) =>
+  call<{ url: string }>(key, `/api/orgs/${orgId}/billing/portal`, { method: "POST", body: {} }).then((r) => r.url);

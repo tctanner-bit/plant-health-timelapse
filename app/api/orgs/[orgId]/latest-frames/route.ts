@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireEntitled } from "../../../../../lib/server/billing";
 import { requireOrg, isResponse } from "../../../../../lib/server/auth";
 import { db, FRAMES_BUCKET } from "../../../../../lib/server/supabase";
 
@@ -12,6 +13,8 @@ const TTL_SEC = 60 * 60;
 export async function GET(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const unpaid = await requireEntitled(ctx);
+  if (unpaid) return unpaid;
 
   const { data: rows, error } = await db().rpc("latest_frames", { p_org: ctx.orgId });
   if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });

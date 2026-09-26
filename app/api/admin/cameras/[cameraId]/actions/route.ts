@@ -8,6 +8,7 @@ import {
   requireAdmin,
 } from "../../../../../../lib/server/admin";
 import { db } from "../../../../../../lib/server/supabase";
+import { syncQuantity } from "../../../../../../lib/server/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,7 @@ export async function POST(req: Request, { params }: { params: { cameraId: strin
           claim_code_hash: setup.hash,
         });
         await audit(ctx, "unclaim", id, { fromOrg: cam.org_id, fromOrgName: cam.org_name, fromRoom: cam.room_name });
+        await syncQuantity(cam.org_id);
         return NextResponse.json({ ok: true, setupCode: setup.code });
       }
       case "new_setup_code": {
@@ -68,12 +70,14 @@ export async function POST(req: Request, { params }: { params: { cameraId: strin
         if (cam.revoked_at) return NextResponse.json({ error: "Already revoked" }, { status: 409 });
         await update({ revoked_at: new Date().toISOString() });
         await audit(ctx, "revoke", id);
+        if (cam.org_id) await syncQuantity(cam.org_id);
         return NextResponse.json({ ok: true });
       }
       case "reactivate": {
         const t = newCameraToken();
         await update({ ingest_token_hash: t.hash, token_hint: t.hint, revoked_at: null });
         await audit(ctx, "reactivate", id, { tokenHint: t.hint });
+        if (cam.org_id) await syncQuantity(cam.org_id);
         return NextResponse.json({
           ok: true,
           camera: { host: GATEWAY_HOST, port: 21, username: cam.ftp_username ?? `cam-${String(cam.serial ?? "").toLowerCase()}`, password: t.token },

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireEntitled } from "../../../../../../../lib/server/billing";
 import { requireOrg, isResponse } from "../../../../../../../lib/server/auth";
 import { db, FRAMES_BUCKET } from "../../../../../../../lib/server/supabase";
 import { loadCamera } from "../../../../../../../lib/server/cameras";
@@ -14,6 +15,8 @@ const MAX_IDS = 100;
 export async function POST(req: Request, { params }: { params: { orgId: string; cameraId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const unpaid = await requireEntitled(ctx);
+  if (unpaid) return unpaid;
   const cam = await loadCamera(ctx, params.cameraId);
   if (cam instanceof NextResponse) return cam;
 

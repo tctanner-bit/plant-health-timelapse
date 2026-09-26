@@ -5,11 +5,12 @@ import type { Session } from "@supabase/supabase-js";
 import { AdminError, FleetCamera, adminAuth, adminFetch, expectedPerDay, fleetState } from "../../lib/admin-client";
 import { ago } from "../../lib/status";
 import { Brand, Centered } from "../ui";
+import BillingTab from "./BillingTab";
 
 // Growlink's camera fleet dashboard: every camera across every customer, with
 // the tools support needs on a call. Staff-only (Supabase Auth + fleet_admins).
 
-type Tab = "fleet" | "usage" | "audit" | "admins";
+type Tab = "fleet" | "billing" | "usage" | "audit" | "admins";
 
 export default function AdminApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -74,6 +75,7 @@ export default function AdminApp() {
         {(
           [
             ["fleet", "Cameras"],
+            ["billing", "Billing"],
             ["usage", "Nova usage"],
             ["audit", "Audit log"],
             ["admins", "Admins"],
@@ -86,6 +88,7 @@ export default function AdminApp() {
       </div>
 
       {tab === "fleet" && <FleetTab />}
+      {tab === "billing" && <BillingTab />}
       {tab === "usage" && <UsageTab />}
       {tab === "audit" && <AuditTab />}
       {tab === "admins" && <AdminsTab me={me} />}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireEntitled } from "../../../../../../../lib/server/billing";
 import { requireOrg, isResponse } from "../../../../../../../lib/server/auth";
 import { db } from "../../../../../../../lib/server/supabase";
 import { loadCamera } from "../../../../../../../lib/server/cameras";
@@ -42,6 +43,8 @@ export async function GET(req: Request, { params }: Ctx) {
 export async function POST(req: Request, { params }: Ctx) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const unpaid = await requireEntitled(ctx);
+  if (unpaid) return unpaid;
   const cam = await loadCamera(ctx, params.cameraId);
   if (cam instanceof NextResponse) return cam;
 

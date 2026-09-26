@@ -1,8 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Camera, listCameras, loadApiKey, saveApiKey, signedInByBuilder, takeBuilderKey } from "../lib/api";
+import {
+  BILLING_REQUIRED_EVENT,
+  Billing,
+  Camera,
+  getBilling,
+  listCameras,
+  loadApiKey,
+  saveApiKey,
+  signedInByBuilder,
+  takeBuilderKey,
+} from "../lib/api";
 import { Org, Room, getOrganizations, getRooms } from "../lib/growlink";
+import BillingView from "./BillingView";
 import CameraHome from "./CameraHome";
 import FacilityView from "./FacilityView";
 import Player from "./Player";
@@ -13,7 +24,7 @@ import { Brand, Centered } from "./ui";
 // (?org=…&view=…&camera=…) so a Builder page or a display cast can deep-link
 // straight to the facility view or one room's timelapse.
 
-type HomeView = "facility" | "cameras";
+type HomeView = "facility" | "cameras" | "billing";
 
 // Screens embedded in Growlink stay open for days. When a newer deployment is
 // live, reload onto it (URL state and the session key survive a reload).
@@ -39,6 +50,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<HomeView>("facility");
   const [claiming, setClaiming] = useState(false);
+  const [billing, setBilling] = useState<Billing | null>(null);
 
   const [builder, setBuilder] = useState(false);
 
@@ -48,7 +60,8 @@ export default function App() {
     const q = new URLSearchParams(window.location.search);
     setOrgId(q.get("org"));
     setCameraId(q.get("camera"));
-    if (q.get("view") === "cameras") setView("cameras");
+    const v = q.get("view");
+    if (v === "cameras" || v === "billing") setView(v);
     setBuilder(signedInByBuilder());
     setApiKey(handed ?? loadApiKey());
   }, []);
@@ -58,7 +71,7 @@ export default function App() {
     const q = new URLSearchParams(window.location.search);
     orgId ? q.set("org", orgId) : q.delete("org");
     cameraId ? q.set("camera", cameraId) : q.delete("camera");
-    view === "cameras" ? q.set("view", "cameras") : q.delete("view");
+    view !== "facility" ? q.set("view", view) : q.delete("view");
     const s = q.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
   }, [apiKey, orgId, cameraId, view]);
@@ -97,6 +110,29 @@ export default function App() {
     } catch {}
   }, [apiKey, orgId]);
 
+  const refreshBilling = useCallback(async () => {
+    if (!apiKey || !orgId) return;
+    try {
+      setBilling(await getBilling(apiKey, orgId));
+    } catch {}
+  }, [apiKey, orgId]);
+
+  useEffect(() => {
+    setBilling(null);
+    refreshBilling();
+  }, [refreshBilling]);
+
+  // Any request refused for billing (trial over) lands on the Billing tab.
+  useEffect(() => {
+    const onRequired = () => {
+      setCameraId(null);
+      setView("billing");
+      refreshBilling();
+    };
+    window.addEventListener(BILLING_REQUIRED_EVENT, onRequired);
+    return () => window.removeEventListener(BILLING_REQUIRED_EVENT, onRequired);
+  }, [refreshBilling]);
+
   // Keep camera status (online/offline, last frame) current on every screen,
   // not just the one that happened to load it: once a minute while visible.
   useEffect(() => {
@@ -104,6 +140,7 @@ export default function App() {
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       refreshCameras();
+      refreshBilling();
       checkForNewBuild();
     };
     const t = window.setInterval(tick, 60_000);
@@ -112,7 +149,7 @@ export default function App() {
       window.clearInterval(t);
       document.removeEventListener("visibilitychange", tick);
     };
-  }, [apiKey, orgId, refreshCameras]);
+  }, [apiKey, orgId, refreshCameras, refreshBilling]);
 
   useEffect(() => {
     setRooms(null);
@@ -174,14 +211,18 @@ export default function App() {
       </header>
 
       <div role="tablist" className="tabs" style={{ padding: 0, marginBottom: 24 }}>
-        {(["facility", "cameras"] as HomeView[]).map((v) => (
+        {(["facility", "cameras", "billing"] as HomeView[]).map((v) => (
           <button key={v} role="tab" aria-selected={view === v} className="tab" onClick={() => setView(v)}>
-            {v === "facility" ? "Facility" : `Cameras · ${cameras.length}`}
+            {v === "facility" ? "Facility" : v === "cameras" ? `Cameras · ${cameras.length}` : "Billing"}
           </button>
         ))}
       </div>
 
-      {view === "facility" ? (
+      {view !== "billing" && <BillingBanner billing={billing} onOpen={() => setView("billing")} />}
+
+      {view === "billing" || (billing && !billing.entitled) ? (
+        <BillingView apiKey={apiKey} orgId={orgId} billing={billing} onRefresh={refreshBilling} />
+      ) : view === "facility" ? (
         <FacilityView
           apiKey={apiKey}
           orgId={orgId}
@@ -202,6 +243,32 @@ export default function App() {
           onOpen={(id) => setCameraId(id)}
         />
       )}
+    </div>
+  );
+}
+
+// Trial ending soon or a failed payment, above every home screen.
+function BillingBanner({ billing: b, onOpen }: { billing: Billing | null; onOpen: () => void }) {
+  if (!b || !b.configured) return null;
+  const live = b.subscription?.status && !["canceled", "incomplete_expired"].includes(b.subscription.status);
+  let tone: "warn" | "alarm" | null = null;
+  let text = "";
+  if (b.state === "past_due") {
+    tone = "alarm";
+    text = "Your last payment didn't go through. Update your card to keep Plant Health AI running.";
+  } else if (b.state === "trial" && !live && (b.daysLeft ?? 99) <= 7) {
+    tone = "warn";
+    text =
+      b.daysLeft === 0
+        ? "Your free trial ends today."
+        : `Your free trial ends in ${b.daysLeft} day${b.daysLeft === 1 ? "" : "s"}.`;
+    text += " Add a payment method to keep going — you won't be charged until it ends.";
+  }
+  if (!tone) return null;
+  return (
+    <div className={`billing-banner ${tone}`} role="status">
+      <span style={{ flex: 1, minWidth: 220 }}>{text}</span>
+      <button className="btn" onClick={onOpen}>Billing</button>
     </div>
   );
 }

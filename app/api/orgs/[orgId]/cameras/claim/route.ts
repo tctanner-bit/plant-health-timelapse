@@ -10,6 +10,7 @@ import {
   roomInOrg,
   toCamera,
 } from "../../../../../../lib/server/cameras";
+import { requireEntitled, syncQuantity } from "../../../../../../lib/server/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const unpaid = await requireEntitled(ctx);
+  if (unpaid) return unpaid;
 
   const body = await req.json().catch(() => ({}));
   const code = typeof body.code === "string" ? normalizeClaimCode(body.code) : null;
@@ -54,5 +57,6 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
       { status: 404 }
     );
 
+  await syncQuantity(ctx.orgId);
   return NextResponse.json({ camera: toCamera(data as CameraRow) }, { status: 201 });
 }

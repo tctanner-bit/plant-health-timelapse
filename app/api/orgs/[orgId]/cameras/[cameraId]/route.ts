@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { syncQuantity } from "../../../../../../lib/server/billing";
 import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
 import { db } from "../../../../../../lib/server/supabase";
 import {
@@ -81,5 +82,6 @@ export async function DELETE(req: Request, { params }: Ctx) {
     .select(CAMERA_COLUMNS)
     .single();
   if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });
+  await syncQuantity(ctx.orgId);
   return NextResponse.json({ camera: toCamera(data as CameraRow) });
 }
