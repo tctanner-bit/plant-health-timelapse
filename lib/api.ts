@@ -79,3 +79,61 @@ export type LatestFrame = { id: number; ts: number; url: string };
 // Every camera's newest frame, signed, in one call. Used by the facility view.
 export const latestFrames = (key: string, orgId: string) =>
   call<{ frames: Record<string, LatestFrame> }>(key, `/api/orgs/${orgId}/latest-frames`).then((r) => r.frames);
+
+// ------------------------------------------------------------ Nova insights
+
+export type InsightFrame = { id: number; ts: number; label: string; role?: string };
+export type InsightObservation = {
+  text: string;
+  category: string;
+  concern: "none" | "watch" | "action";
+  frames: InsightFrame[];
+  sensors: string[];
+};
+export type Insight = {
+  id: string;
+  cameraId: string;
+  kind: "daily" | "moment";
+  periodStart: number;
+  periodEnd: number;
+  day: string | null;
+  question: string | null;
+  status: "running" | "ready" | "failed";
+  headline: string | null;
+  concern: "none" | "watch" | "action" | null;
+  confidence: "low" | "medium" | "high" | null;
+  observations: InsightObservation[];
+  suggestions: string[];
+  frames: InsightFrame[];
+  error: string | null;
+  createdAt: string;
+};
+export type LatestInsight = { id: string; kind: string; concern: string | null; headline: string | null; createdAt: string };
+
+const tz = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; }
+};
+
+export const listInsights = (key: string, orgId: string, cameraId: string) =>
+  call<{ insights: Insight[] }>(key, `${base(orgId)}/${cameraId}/insights`).then((r) => r.insights);
+
+// A completed local day, e.g. yesterday: start/end are local midnights.
+export const requestDailyInsight = (
+  key: string, orgId: string, cameraId: string,
+  day: { label: string; start: number; end: number }, uom?: unknown
+) =>
+  call<{ insight: Insight }>(key, `${base(orgId)}/${cameraId}/insights`, {
+    method: "POST",
+    body: { kind: "daily", day: day.label, start: day.start, end: day.end, tz: tz(), uom },
+  }).then((r) => r.insight);
+
+export const requestMomentInsight = (
+  key: string, orgId: string, cameraId: string, at: number, question?: string, uom?: unknown
+) =>
+  call<{ insight: Insight }>(key, `${base(orgId)}/${cameraId}/insights`, {
+    method: "POST",
+    body: { kind: "moment", at, question, tz: tz(), uom },
+  }).then((r) => r.insight);
+
+export const latestInsights = (key: string, orgId: string) =>
+  call<{ latest: Record<string, LatestInsight> }>(key, `/api/orgs/${orgId}/insights/latest`).then((r) => r.latest);

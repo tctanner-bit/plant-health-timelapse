@@ -98,3 +98,33 @@ tokens itself): `supabase functions deploy ingest-frame --no-verify-jwt`.
 
 At 1920×1080 (~300–500 KB), one camera at 5-minute intervals is about
 3–4 GB/month. A retention job isn't built yet.
+
+## Nova insights
+
+Nova reads a camera's frames against its room's sensor history and returns
+structured observations. Each observation cites the frames and sensors it
+relies on, and each insight carries a concern level (none / watch / action).
+
+- **Daily review:** three lights-on frames from a completed day, plus the
+  same time a day and a week earlier. It's made the first time anyone opens
+  the camera after that day ends, and shared with the org
+  (`camera_insights`, one per camera per day). The server can't run it on a
+  schedule, because it never stores a Growlink key.
+- **Ask about this frame:** the chosen frame, an hour earlier, and the same
+  time yesterday, with the six hours of sensor data before it, plus an
+  optional question. Capped at 20 per organization per hour.
+- **Facility tiles** flag rooms whose latest insight is Watch or Action.
+
+The model call goes through the Growlink AI proxy (display-fleet Supabase
+project, function `ai`), the same one the display app's Nova uses. The OpenAI
+key, model and token caps live there. This app authenticates with a service
+key:
+
+| Where | Setting |
+|---|---|
+| display-fleet Supabase → Edge Function secrets | `AI_SERVICE_KEYS` = the key (comma-separate several) |
+| Vercel (server only) | `NOVA_SERVICE_KEY` = the same key |
+| Vercel (optional) | `NOVA_PROXY_URL` to point at a different proxy |
+
+Without the key, Nova shows "Nova isn't configured on this server yet" and
+nothing else breaks.

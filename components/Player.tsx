@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, listFrames, signFrames, updateCamera } from "../lib/api";
+import {
+  Camera,
+  Insight,
+  listFrames,
+  listInsights,
+  requestDailyInsight,
+  requestMomentInsight,
+  signFrames,
+  updateCamera,
+} from "../lib/api";
 import { Sensor, Uom, getSensorChart, getSensors } from "../lib/growlink";
 import {
   SensorMeta,
@@ -17,8 +26,7 @@ import SensorReadouts from "./SensorReadouts";
 import SensorCharts from "./SensorCharts";
 import SensorToggles from "./SensorToggles";
 import TimeRangeBar from "./TimeRangeBar";
-import NovaDrawer, { ChatTurn, JournalEntry } from "./NovaDrawer";
-import { buildPlaceholderJournal, placeholderAsk } from "../lib/nova-placeholder";
+import NovaPanel from "./NovaPanel";
 import { Brand } from "./ui";
 
 type Frame = { id: number; ts: number };
@@ -60,8 +68,10 @@ export default function Player({
   const [sensorError, setSensorError] = useState<string | null>(null);
 
   const [novaOpen, setNovaOpen] = useState(false);
-  const [chat, setChat] = useState<ChatTurn[]>([]);
-  const [thinking, setThinking] = useState(false);
+  const [insights, setInsights] = useState<Insight[] | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [dailyBusy, setDailyBusy] = useState<string | null>(null);
+  const dailyTried = useRef(false);
 
   const timer = useRef<number | null>(null);
   const pendingJump = useRef<number | null>(null);
@@ -200,10 +210,52 @@ export default function Player({
     return () => { if (timer.current) window.clearInterval(timer.current); };
   }, [playing, fps, frames]);
 
-  const journal: JournalEntry[] = useMemo(
-    () => buildPlaceholderJournal(frames ?? [], series, rows),
-    [frames, series, rows]
-  );
+  // Nova insights for this camera.
+  const loadInsights = async () => {
+    setInsightsLoading(true);
+    try {
+      setInsights(await listInsights(apiKey, orgId, camera.id));
+    } catch {
+      setInsights((prev) => prev ?? []);
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
+  useEffect(() => {
+    loadInsights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey, orgId, camera.id]);
+
+  // Yesterday's daily review is made the first time anyone opens the camera
+  // after that day ends (the server never holds a Growlink key to run it on
+  // a schedule). Shared with the org, so it runs once per camera per day.
+  useEffect(() => {
+    if (dailyTried.current || !insights || !bounds) return;
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 1);
+    const label = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+    if (bounds.first >= end.getTime()) return; // camera started today
+    if (insights.some((i) => i.kind === "daily" && i.day === label)) return;
+    dailyTried.current = true;
+    setDailyBusy(start.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }));
+    requestDailyInsight(apiKey, orgId, camera.id, { label, start: start.getTime(), end: end.getTime() }, uom)
+      .catch(() => {})
+      .finally(() => {
+        setDailyBusy(null);
+        loadInsights();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [insights, bounds]);
+
+  const askNova = async (question: string) => {
+    if (!current) return;
+    const i = await requestMomentInsight(apiKey, orgId, camera.id, current.ts, question || undefined, uom);
+    setInsights((prev) => [i, ...(prev ?? []).filter((x) => x.id !== i.id)]);
+  };
+
+  const latestConcern = insights?.find((i) => i.status === "ready")?.concern;
 
   const current = frames?.[index];
   const currentUrl = current ? urls[current.id] : undefined;
@@ -231,13 +283,6 @@ export default function Player({
       return next;
     });
 
-  const askNova = async (text: string) => {
-    setChat((c) => [...c, { role: "user", text, ts: Date.now() }]);
-    setThinking(true);
-    const reply = await placeholderAsk(text);
-    setChat((c) => [...c, { role: "nova", text: reply, ts: Date.now() }]);
-    setThinking(false);
-  };
 
   const header = (
     <header className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", gap: 16, marginBottom: 20 }}>
@@ -253,8 +298,11 @@ export default function Player({
         </div>
       </div>
       <button className="btn" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">Settings</button>
-      <button className="btn nova" onClick={() => setNovaOpen(true)} aria-label="Open Nova AI">
-        <span aria-hidden>◆</span> Nova AI
+      <button className="btn nova" onClick={() => setNovaOpen(true)} aria-label="Open Nova insights">
+        <span aria-hidden>◆</span> Nova
+        {(latestConcern === "watch" || latestConcern === "action") && (
+          <span className="nova-dot" style={{ background: latestConcern === "action" ? "var(--alarm)" : "var(--warn)" }} aria-label={latestConcern} />
+        )}
       </button>
     </header>
   );
@@ -388,12 +436,13 @@ export default function Player({
         tMax={range?.[1] ?? null}
       />
 
-      <NovaDrawer
+      <NovaPanel
         open={novaOpen}
         onClose={() => setNovaOpen(false)}
-        entries={journal}
-        chat={chat}
-        thinking={thinking}
+        insights={insights}
+        loading={insightsLoading}
+        dailyBusy={dailyBusy}
+        currentTs={tNow}
         onAsk={askNova}
         onJumpTo={(ts) => {
           jumpToTs(ts);

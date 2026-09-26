@@ -285,3 +285,31 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .reading.more::before { display: none; }
 /* The facility grid can use more of a wide screen than reading views. */
 .page.wide { max-width: 1760px; }
+
+/* ------------------------------------------------------------------ nova */
+.nova-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 40; opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+.nova-scrim[data-open="true"] { opacity: 1; pointer-events: auto; }
+.nova-panel { position: fixed; top: 0; right: 0; height: 100vh; width: min(460px, 100vw); background: var(--ink); border-left: 1px solid var(--line-hi); z-index: 41; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 220ms ease; outline: none; }
+.nova-panel[data-open="true"] { transform: translateX(0); box-shadow: -30px 0 80px -30px rgba(0, 0, 0, 0.8); }
+.nova-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.nova-mark { width: 32px; height: 32px; border-radius: var(--radius); display: grid; place-items: center; background: linear-gradient(135deg, #a47eff, #3fb984); color: #fff; font-size: 14px; }
+.nova-scroll { flex: 1; overflow-y: auto; padding: 16px 18px 24px; display: grid; gap: 12px; align-content: start; }
+.nova-ask { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.nova-card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--line-hi); border-radius: var(--radius); padding: 14px; }
+.nova-card.concern-ok { border-left-color: var(--ok); }
+.nova-card.concern-warn { border-left-color: var(--warn); }
+.nova-card.concern-alarm { border-left-color: var(--alarm); background: linear-gradient(90deg, var(--alarm-bg), var(--panel) 40%); }
+.nova-headline { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.3; margin: 10px 0 0; }
+.nova-obs { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.obs { padding-left: 12px; border-left: 2px solid var(--line-hi); }
+.obs-warn { border-left-color: var(--warn); }
+.obs-alarm { border-left-color: var(--alarm); }
+.obs-cat { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
+.obs-warn .obs-cat { color: var(--warn); }
+.obs-alarm .obs-cat { color: var(--alarm); }
+.nova-suggest { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; line-height: 1.45; }
+.nova-dot { width: 8px; height: 8px; border-radius: 99px; display: inline-block; }
+.nova-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+.room-nova { display: grid; gap: 4px; text-align: left; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; color: var(--text); cursor: pointer; }
+.room-nova:hover { border-color: var(--line-hi); }
+.room-nova-text { font-size: 13px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

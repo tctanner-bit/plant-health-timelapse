@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, LatestFrame, latestFrames } from "../lib/api";
+import { Camera, LatestFrame, LatestInsight, latestFrames, latestInsights } from "../lib/api";
 import { LiveReading, Room, Sensor, getLiveSensors, getSensors } from "../lib/growlink";
 import { SensorMeta, configuredSensors, displayRows, fmt } from "../lib/sensors";
 import { loadUom } from "../lib/prefs";
@@ -49,6 +49,7 @@ export default function FacilityView({
   const [latest, setLatest] = useState<Record<string, LatestFrame>>({});
   const [roomSensors, setRoomSensors] = useState<Record<string, Sensor[]>>({});
   const [live, setLive] = useState<Record<string, LiveReading>>({});
+  const [nova, setNova] = useState<Record<string, LatestInsight>>({});
   const [liveError, setLiveError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [query, setQuery] = useState("");
@@ -102,6 +103,7 @@ export default function FacilityView({
         return next;
       });
     } catch {}
+    latestInsights(apiKey, orgId).then(setNova).catch(() => {});
     refreshRef.current();
   }, [apiKey, orgId]);
 
@@ -219,6 +221,7 @@ export default function FacilityView({
               room={roomName(c.roomId)}
               showCameraName={(camsPerRoom.get(c.roomId) ?? 0) > 1}
               frame={latest[c.id]}
+              insight={nova[c.id]}
               sensors={roomSensors[c.roomId]}
               live={live}
               onOpen={() => onOpen(c.id)}
@@ -235,6 +238,7 @@ function RoomTile({
   room,
   showCameraName,
   frame,
+  insight,
   sensors,
   live,
   onOpen,
@@ -243,6 +247,7 @@ function RoomTile({
   room: string;
   showCameraName: boolean;
   frame?: LatestFrame;
+  insight?: LatestInsight;
   sensors?: Sensor[];
   live: Record<string, LiveReading>;
   onOpen: () => void;
@@ -273,6 +278,15 @@ function RoomTile({
           <span>{room}</span>
           {showCameraName && <span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>{c.name}</span>}
         </button>
+
+        {insight && (insight.concern === "watch" || insight.concern === "action") && (
+          <button className="room-nova" onClick={onOpen} title={insight.headline ?? undefined}>
+            <span className="nova-flag" style={{ color: insight.concern === "action" ? "var(--alarm)" : "var(--warn)" }}>
+              ◆ Nova · {insight.concern === "action" ? "Action" : "Watch"}
+            </span>
+            <span className="room-nova-text">{insight.headline}</span>
+          </button>
+        )}
 
         {c.sensors.length === 0 ? (
           <button className="room-empty" onClick={onOpen}>No sensors chosen · open to choose</button>
