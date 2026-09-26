@@ -13,7 +13,11 @@ export function adminAuth(): SupabaseClient {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) throw new Error("Admin sign-in isn't configured (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY)");
-    client = createClient(url, key, { auth: { persistSession: true, storageKey: "plant-health-ai-admin" } });
+    // Implicit flow: the emailed link comes back with the session in the URL
+    // hash, which detectSessionInUrl picks up and stores.
+    client = createClient(url, key, {
+      auth: { persistSession: true, storageKey: "plant-health-ai-admin", flowType: "implicit", detectSessionInUrl: true },
+    });
   }
   return client;
 }

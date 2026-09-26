@@ -66,7 +66,7 @@ export default function AdminApp() {
           <h1 className="title" style={{ marginTop: 10 }}>Camera fleet</h1>
           <div className="subtitle">Growlink support · {me}</div>
         </div>
-        <button className="btn ghost" onClick={() => setPwOpen(true)}>Change password</button>
+        <button className="btn ghost" onClick={() => setPwOpen(true)}>Set password</button>
         <button className="btn ghost" onClick={signOut}>Sign out</button>
       </header>
 
@@ -99,35 +99,80 @@ export default function AdminApp() {
 function SignIn({ configError }: { configError: string | null }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [usePassword, setUsePassword] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(configError);
+
+  // Normal path: email a one-time sign-in link (staff domain or exceptions list).
+  const sendLink = async () => {
+    const res = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? "Couldn't send the link");
+    setSent(email.trim());
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setErr(null);
-    const { error } = await adminAuth().auth.signInWithPassword({ email: email.trim(), password });
-    if (error) setErr(error.message === "Invalid login credentials" ? "Wrong email or password" : error.message);
-    setBusy(false);
+    try {
+      if (usePassword) {
+        const { error } = await adminAuth().auth.signInWithPassword({ email: email.trim(), password });
+        if (error) throw new Error(error.message === "Invalid login credentials" ? "Wrong email or password" : error.message);
+      } else {
+        await sendLink();
+      }
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
+
+  if (sent)
+    return (
+      <Centered>
+        <div className="card" style={{ width: "min(440px, 100%)", textAlign: "left", padding: 28 }}>
+          <Brand />
+          <h1 className="title" style={{ marginTop: 14 }}>Check your email</h1>
+          <p className="muted" style={{ fontSize: 14, lineHeight: 1.55, margin: "10px 0 18px" }}>
+            We sent a sign-in link to <b style={{ color: "var(--text)" }}>{sent}</b>. Open it on this device to finish
+            signing in. It works once and expires in an hour. Nothing there? Check spam.
+          </p>
+          <button className="btn ghost" onClick={() => setSent(null)}>Use a different email</button>
+        </div>
+      </Centered>
+    );
 
   return (
     <Centered>
       <form onSubmit={submit} className="card" style={{ width: "min(420px, 100%)", textAlign: "left", padding: 28 }}>
         <Brand />
         <h1 className="title" style={{ marginTop: 14 }}>Fleet sign-in</h1>
-        <p className="muted" style={{ fontSize: 14, margin: "8px 0 20px" }}>Growlink staff only.</p>
+        <p className="muted" style={{ fontSize: 14, margin: "8px 0 20px" }}>
+          Growlink staff: enter your @growlink.com email and we&apos;ll send you a sign-in link.
+        </p>
         <label className="label">
           <span>Email</span>
-          <input className="field" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
+          <input className="field" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@growlink.com" autoFocus />
         </label>
-        <label className="label" style={{ marginTop: 12 }}>
-          <span>Password</span>
-          <input className="field" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
+        {usePassword && (
+          <label className="label" style={{ marginTop: 12 }}>
+            <span>Password</span>
+            <input className="field" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+        )}
         {err && <div className="error-text" style={{ marginTop: 10 }}>{err}</div>}
-        <button type="submit" className="btn solid" style={{ marginTop: 18, width: "100%" }} disabled={busy || !email || !password}>
-          {busy ? "Signing in…" : "Sign in"}
+        <button type="submit" className="btn solid" style={{ marginTop: 18, width: "100%" }} disabled={busy || !email || (usePassword && !password)}>
+          {busy ? (usePassword ? "Signing in…" : "Sending…") : usePassword ? "Sign in" : "Email me a sign-in link"}
+        </button>
+        <button type="button" className="btn ghost" style={{ marginTop: 8, width: "100%" }} onClick={() => { setUsePassword((v) => !v); setErr(null); }}>
+          {usePassword ? "Email me a link instead" : "Sign in with a password"}
         </button>
       </form>
     </Centered>
@@ -147,9 +192,9 @@ function ChangePassword({ onClose }: { onClose: () => void }) {
   };
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: "min(420px, 100%)" }} role="dialog" aria-label="Change password">
+      <div className="modal" style={{ width: "min(420px, 100%)" }} role="dialog" aria-label="Set password">
         <div className="modal-head">
-          <h2 className="title" style={{ fontSize: 20, flex: 1 }}>Change password</h2>
+          <h2 className="title" style={{ fontSize: 20, flex: 1 }}>Set password</h2>
           <button className="btn icon ghost" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="modal-body">
