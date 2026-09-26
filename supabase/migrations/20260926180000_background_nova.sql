@@ -93,3 +93,6 @@ alter table public.camera_events enable row level security;
 alter table public.job_locks enable row level security;
 revoke all on function public.claim_insight_job() from public, anon, authenticated;
 grant execute on function public.claim_insight_job() to service_role;
+
+-- Mean colour spread (max−min channel, 0–255): true infrared is ~0–2.
+alter table public.camera_frame_stats add column chroma real;

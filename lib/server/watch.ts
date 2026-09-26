@@ -131,6 +131,7 @@ async function frameConditions(cam: Cam, tz: string | null, lastId: number | nul
     camera_id: cam.id,
     captured_at: f.captured_at,
     brightness: s.brightness,
+    chroma: s.chroma,
     ir: s.ir,
     thumb: encodeThumb(s.thumb),
   });

@@ -4,7 +4,11 @@
 
 import sharp from "sharp";
 
-export type FrameStats = { brightness: number; ir: boolean; thumb: Uint8Array };
+export type FrameStats = { brightness: number; chroma: number; ir: boolean; thumb: Uint8Array };
+
+// Infrared night frames are grey: mean channel spread within JPEG noise.
+// Kept tight so a washed-out daytime scene isn't mistaken for night.
+const IR_CHROMA = 3;
 
 const W = 32;
 const H = 18;
@@ -24,7 +28,8 @@ export async function frameStats(jpeg: Buffer): Promise<FrameStats> {
     spread += Math.max(r, g, b) - Math.min(r, g, b);
   }
   const n = W * H;
-  return { brightness: sum / n, ir: spread / n < 6, thumb };
+  const chroma = spread / n;
+  return { brightness: sum / n, chroma, ir: chroma < IR_CHROMA, thumb };
 }
 
 export const encodeThumb = (t: Uint8Array) => Buffer.from(t).toString("base64");
