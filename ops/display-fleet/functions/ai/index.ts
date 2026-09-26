@@ -126,6 +126,15 @@ function countImages(messages: unknown): number {
 }
 
 const clip = (v: string | null, n: number) => (v ? v.slice(0, n) : null);
+// Header values are URL-encoded by callers so any org name survives transport.
+const decoded = (v: string | null) => {
+  if (!v) return null;
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+};
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -174,7 +183,7 @@ Deno.serve(async (req: Request) => {
     caller = 'service';
     // Trusted: only holders of a service key reach this branch.
     orgId = clip(req.headers.get('x-usage-org'), 64)?.toLowerCase() ?? null;
-    orgName = clip(req.headers.get('x-usage-org-name'), 120);
+    orgName = clip(decoded(req.headers.get('x-usage-org-name')), 120);
   } else {
     return new Response('unauthorized', { status: 401, headers: CORS });
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Camera, listCameras, loadApiKey, saveApiKey } from "../lib/api";
+import { Camera, listCameras, loadApiKey, saveApiKey, signedInByBuilder, takeBuilderKey } from "../lib/api";
 import { Org, Room, getOrganizations, getRooms } from "../lib/growlink";
 import CameraHome from "./CameraHome";
 import FacilityView from "./FacilityView";
@@ -26,12 +26,17 @@ export default function App() {
   const [view, setView] = useState<HomeView>("facility");
   const [claiming, setClaiming] = useState(false);
 
+  const [builder, setBuilder] = useState(false);
+
   useEffect(() => {
+    // First, before anything reads the URL: a key handed over by Growlink Builder.
+    const handed = takeBuilderKey();
     const q = new URLSearchParams(window.location.search);
     setOrgId(q.get("org"));
     setCameraId(q.get("camera"));
     if (q.get("view") === "cameras") setView("cameras");
-    setApiKey(loadApiKey());
+    setBuilder(signedInByBuilder());
+    setApiKey(handed ?? loadApiKey());
   }, []);
 
   useEffect(() => {
@@ -134,7 +139,7 @@ export default function App() {
           </select>
         )}
         <button className="btn accent" onClick={() => { setView("cameras"); setClaiming(true); }}>+ Add camera</button>
-        <button className="btn ghost" onClick={signOut}>Sign out</button>
+        {!builder && <button className="btn ghost" onClick={signOut}>Sign out</button>}
       </header>
 
       <div role="tablist" className="tabs" style={{ padding: 0, marginBottom: 24 }}>

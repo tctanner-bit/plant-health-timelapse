@@ -66,12 +66,43 @@ export const signFrames = (key: string, orgId: string, id: string, ids: number[]
   call<{ urls: Record<number, string> }>(key, `${base(orgId)}/${id}/frame-urls`, { method: "POST", body: { ids } }).then((r) => r.urls);
 
 // The API key lives in sessionStorage only — forgotten when the tab closes.
+// Opened from Growlink Builder, the portal supplies it (see takeBuilderKey),
+// so users there never type it.
 const KEY = "growlink-api-key";
+const FROM_BUILDER = "growlink-key-from-builder";
 export const loadApiKey = () => {
   try { return sessionStorage.getItem(KEY); } catch { return null; }
 };
 export const saveApiKey = (k: string | null) => {
-  try { k ? sessionStorage.setItem(KEY, k) : sessionStorage.removeItem(KEY); } catch {}
+  try {
+    k ? sessionStorage.setItem(KEY, k) : sessionStorage.removeItem(KEY);
+    if (!k) sessionStorage.removeItem(FROM_BUILDER);
+  } catch {}
+};
+
+// Growlink's portal launches Growlink-authored apps already signed in: a hosted
+// app gets the user's key as ?apiKey=… on its frame URL, a single-file app gets
+// window.GROWLINK_API_KEY (the portal's injectAppRuntime contract). Take it,
+// keep it for this tab, and scrub it from the address bar so it doesn't linger
+// in history or get copied along with a link.
+export function takeBuilderKey(): string | null {
+  const url = new URL(window.location.href);
+  const fromUrl = url.searchParams.get("apiKey")?.trim();
+  const injected = (window as unknown as { GROWLINK_API_KEY?: unknown }).GROWLINK_API_KEY;
+  const key = fromUrl || (typeof injected === "string" && injected.trim()) || null;
+  if (fromUrl) {
+    url.searchParams.delete("apiKey");
+    window.history.replaceState(null, "", url.pathname + (url.search ? url.search : "") + url.hash);
+  }
+  if (key) {
+    saveApiKey(key);
+    try { sessionStorage.setItem(FROM_BUILDER, "1"); } catch {}
+  }
+  return key;
+}
+
+export const signedInByBuilder = () => {
+  try { return sessionStorage.getItem(FROM_BUILDER) === "1"; } catch { return false; }
 };
 
 export type LatestFrame = { id: number; ts: number; url: string };
