@@ -124,7 +124,7 @@ export type InsightObservation = {
 export type Insight = {
   id: string;
   cameraId: string;
-  kind: "daily" | "moment";
+  kind: "daily" | "moment" | "range";
   periodStart: number;
   periodEnd: number;
   day: string | null;
@@ -164,6 +164,15 @@ export const requestMomentInsight = (
   call<{ insight: Insight }>(key, `${base(orgId)}/${cameraId}/insights`, {
     method: "POST",
     body: { kind: "moment", at, question, tz: tz(), uom },
+  }).then((r) => r.insight);
+
+// Whatever period is selected in the player (an hour … a month).
+export const requestRangeInsight = (
+  key: string, orgId: string, cameraId: string, start: number, end: number, question?: string, uom?: unknown
+) =>
+  call<{ insight: Insight }>(key, `${base(orgId)}/${cameraId}/insights`, {
+    method: "POST",
+    body: { kind: "range", start, end, question, tz: tz(), uom },
   }).then((r) => r.insight);
 
 export const latestInsights = (key: string, orgId: string) =>

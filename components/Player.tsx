@@ -8,6 +8,7 @@ import {
   listInsights,
   requestDailyInsight,
   requestMomentInsight,
+  requestRangeInsight,
   signFrames,
   updateCamera,
 } from "../lib/api";
@@ -304,6 +305,12 @@ export default function Player({
     setInsights((prev) => [i, ...(prev ?? []).filter((x) => x.id !== i.id)]);
   };
 
+  const analyzeRange = async (question: string) => {
+    if (!range) return;
+    const i = await requestRangeInsight(apiKey, orgId, camera.id, range[0], range[1], question || undefined, uom);
+    setInsights((prev) => [i, ...(prev ?? []).filter((x) => x.id !== i.id)]);
+  };
+
   const latestConcern = insights?.find((i) => i.status === "ready")?.concern;
 
   const current = frames?.[index];
@@ -493,7 +500,9 @@ export default function Player({
         loading={insightsLoading}
         dailyBusy={dailyBusy}
         currentTs={tNow}
+        range={range}
         onAsk={askNova}
+        onAnalyzeRange={analyzeRange}
         onJumpTo={(ts) => {
           jumpToTs(ts);
           setNovaOpen(false);

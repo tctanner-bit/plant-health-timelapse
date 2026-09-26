@@ -61,8 +61,17 @@ type SensorSummary = {
   avg: number | null;
   lightsOnAvg: number | null;
   lightsOffAvg: number | null;
-  hourly: (number | null)[];
+  trend: (number | null)[]; // one average per bucket (see trendBucketMinutes) from the period start
 };
+
+// Trend buckets sized to the period: 5 minutes for an hour, hourly for a
+// day, a few hours for a week — never more than 48 points per sensor.
+const BUCKETS_MIN = [5, 15, 30, 60, 120, 180, 360, 720, 1440];
+export function trendBucketMs(start: number, end: number) {
+  const span = end - start;
+  const m = BUCKETS_MIN.find((b) => span / (b * 60_000) <= 48) ?? 1440;
+  return m * 60_000;
+}
 
 export class NovaError extends Error {
   constructor(message: string, public status = 502) {
@@ -140,7 +149,8 @@ async function summarizeSensors(
   }));
   const { series } = rowSeries(raw.series, rows);
 
-  const hours = Math.max(1, Math.ceil((end - start) / HOUR));
+  const bucket = trendBucketMs(start, end);
+  const buckets = Math.max(1, Math.min(48, Math.ceil((end - start) / bucket)));
   const round = (v: number) => Math.round(v * 100) / 100;
   const summary = rows.map((r) => {
     const pts = (series[r.id] ?? []).filter((p) => p.t >= start && p.t <= end);
@@ -149,10 +159,9 @@ async function summarizeSensors(
     const avg = (xs: { v: number }[]) => (xs.length ? round(xs.reduce((a, p) => a + p.v, 0) / xs.length) : null);
     const lo = pts.length ? pts.reduce((a, b) => (b.v < a.v ? b : a)) : null;
     const hi = pts.length ? pts.reduce((a, b) => (b.v > a.v ? b : a)) : null;
-    const hourly = Array.from({ length: Math.min(hours, 48) }, (_, h) => {
-      const bucket = pts.filter((p) => p.t >= start + h * HOUR && p.t < start + (h + 1) * HOUR);
-      return avg(bucket);
-    });
+    const trend = Array.from({ length: buckets }, (_, h) =>
+      avg(pts.filter((p) => p.t >= start + h * bucket && p.t < start + (h + 1) * bucket))
+    );
     return {
       label: r.label,
       unit: r.unit,
@@ -164,7 +173,7 @@ async function summarizeSensors(
       avg: avg(pts),
       lightsOnAvg: avg(on),
       lightsOffAvg: avg(off),
-      hourly,
+      trend,
     };
   });
   return { summary, periods };
@@ -287,7 +296,7 @@ type Ctx = { apiKey: string; orgId: string; orgName: string | null };
 type Cam = CameraRow;
 
 function timeFmt(tz: string | undefined) {
-  const opts: Intl.DateTimeFormatOptions = { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: tz };
+  const opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: tz };
   let f: Intl.DateTimeFormat;
   try {
     f = new Intl.DateTimeFormat("en-US", opts);
@@ -379,6 +388,8 @@ export async function analyzeDay(
 
   return run(ctx, picked, summary, fmt, { feature: "daily_review", ref: opts.ref }, {
     intro: `Daily review of camera "${cam.name}" for ${fmt(start)} – ${fmt(end)}.`,
+    periodStart: start,
+    bucketLabel: bucketLabel(start, end),
   });
 }
 
@@ -412,8 +423,102 @@ export async function analyzeMoment(
   const result = await run(ctx, picked, summary, fmt, { feature: "moment", ref: opts.ref }, {
     intro: `Look at camera "${cam.name}" at ${fmt(t)}. The sensor summary covers the six hours before it.`,
     question: q,
+    periodStart: start,
+    bucketLabel: bucketLabel(start, end),
   });
   return { ...result, periodStart: start, periodEnd: end };
+}
+
+function bucketLabel(start: number, end: number) {
+  const m = trendBucketMs(start, end) / 60_000;
+  return m < 60 ? `${m} minutes` : m === 60 ? "hour" : m < 1440 ? `${m / 60} hours` : "day";
+}
+
+function spanLabel(ms: number) {
+  const h = ms / HOUR;
+  if (h < 1.5) return `${Math.round(ms / 60_000)} minutes`;
+  if (h < 48) return `${Math.round(h)} hours`;
+  return `${Math.round(h / 24)} days`;
+}
+
+// The frame closest to t within ±maxGap, found with two indexed lookups, so
+// long ranges never load every frame.
+async function frameNear(cam: CameraRow, orgId: string, t: number, maxGap: number, lo: number, hi: number): Promise<FrameRow | null> {
+  const iso = (x: number) => new Date(x).toISOString();
+  const q = () => db().from("camera_frames").select("id, captured_at, storage_path").eq("camera_id", cam.id).eq("org_id", orgId);
+  const [after, before] = await Promise.all([
+    q().gte("captured_at", iso(t)).lte("captured_at", iso(Math.min(hi, t + maxGap))).order("captured_at").limit(1).maybeSingle(),
+    q().lt("captured_at", iso(t)).gte("captured_at", iso(Math.max(lo, t - maxGap))).order("captured_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const cands = [after.data, before.data].filter(Boolean) as FrameRow[];
+  return nearest(cands, t, maxGap);
+}
+
+export const RANGE_MIN_MS = 15 * 60_000;
+export const RANGE_MAX_MS = 31 * DAY;
+
+/**
+ * Any selected period, from an hour to a month: up to eight frames spread
+ * across it (for multi-day periods, mid photoperiod of each day so growth is
+ * compared in the same light), read against the period's sensor trends.
+ */
+export async function analyzeRange(
+  ctx: Ctx,
+  cam: Cam,
+  opts: { start: number; end: number; question?: string; tz?: string; uom?: Uom; ref: string }
+): Promise<NovaResult> {
+  const { start, end } = opts;
+  const span = end - start;
+  const fmt = timeFmt(opts.tz);
+  const { summary, periods } = await summarizeSensors(ctx.apiKey, ctx.orgId, cam, start, end, opts.uom, fmt);
+
+  const MAX_FRAMES = 8;
+  let targets: { t: number; role: string }[] = [];
+  if (span > 36 * HOUR) {
+    // One per photoperiod, at its middle; fall back to midday-ish spacing.
+    const days: { t: number; role: string }[] = [];
+    for (let i = 0; i < periods.length; i++) {
+      const p = periods[i];
+      if (!p.on) continue;
+      const off = periods.slice(i + 1).find((x) => !x.on)?.t ?? p.t + 12 * HOUR;
+      const mid = (p.t + off) / 2;
+      if (mid >= start && mid <= end) days.push({ t: mid, role: "mid photoperiod" });
+    }
+    if (days.length < 2) {
+      const n = Math.min(MAX_FRAMES, Math.max(2, Math.round(span / DAY)));
+      for (let i = 0; i < n; i++) days.push({ t: start + ((i + 0.5) * span) / n, role: "spaced across the period" });
+    }
+    // Keep the first and last, thin the middle evenly.
+    if (days.length > MAX_FRAMES) {
+      const step = (days.length - 1) / (MAX_FRAMES - 1);
+      targets = Array.from({ length: MAX_FRAMES }, (_, i) => days[Math.round(i * step)]);
+    } else targets = days;
+  } else {
+    const n = span <= 2 * HOUR ? 4 : span <= 8 * HOUR ? 6 : MAX_FRAMES;
+    targets = Array.from({ length: n }, (_, i) => ({
+      t: start + (i * span) / (n - 1),
+      role: i === 0 ? "start of the period" : i === n - 1 ? "end of the period" : "spaced across the period",
+    }));
+  }
+
+  const gap = Math.max(10 * 60_000, Math.min(3 * HOUR, span / (targets.length * 2)));
+  const found = await Promise.all(targets.map((tg) => frameNear(cam, ctx.orgId, tg.t, gap, start, end)));
+  const picked: { row: FrameRow; role: string; detail: "low" | "high" }[] = [];
+  found.forEach((f, i) => {
+    if (f && !picked.some((p) => p.row.id === f.id)) picked.push({ row: f, role: targets[i].role, detail: "low" });
+  });
+  if (picked.length < 2) throw new NovaError("Not enough frames in this range for Nova to compare — pick a longer range", 409);
+  // Look closely at the first and last: that's where change shows.
+  picked[0].detail = "high";
+  picked[picked.length - 1].detail = "high";
+
+  const q = opts.question?.trim().slice(0, 500);
+  return run(ctx, picked, summary, fmt, { feature: "range", ref: opts.ref }, {
+    intro: `Review of camera "${cam.name}" over the ${spanLabel(span)} from ${fmt(start)} to ${fmt(end)}. Describe how the canopy and environment changed across this whole period — trends, events, and anything that stands out — not just a single moment.`,
+    question: q,
+    periodStart: start,
+    bucketLabel: bucketLabel(start, end),
+  });
 }
 
 async function run(
@@ -422,7 +527,7 @@ async function run(
   summary: SensorSummary[],
   fmt: (t: number) => string,
   tag: { feature: string; ref: string },
-  extra: { intro: string; question?: string }
+  extra: { intro: string; question?: string; periodStart: number; bucketLabel: string }
 ): Promise<NovaResult> {
   // Chronological labels F1, F2 … so the model can cite them.
   const ordered = [...picked].sort((a, b) => new Date(a.row.captured_at).getTime() - new Date(b.row.captured_at).getTime());
@@ -446,7 +551,7 @@ async function run(
     extra.intro,
     extra.question ? `The grower asks: "${extra.question}" — answer it directly in the headline and first observation.` : null,
     `Frames (oldest first): ${frames.map((f) => `${f.label} = ${fmt(f.ts)}, ${f.role}`).join("; ")}.`,
-    `Sensor summary (values in the units shown; "hourly" is one average per hour from the start of the period; lightsOnAvg/lightsOffAvg split by the room's light schedule; averagedOver = number of sensors combined): ${sensorText}`,
+    `Sensor summary (values in the units shown; "trend" is one average per ${extra.bucketLabel} from ${fmt(extra.periodStart)}; lightsOnAvg/lightsOffAvg split by the room's light schedule; averagedOver = number of sensors combined): ${sensorText}`,
     `Metric names you may see: ${Object.values(METRIC_LABELS).join(", ")}.`,
   ]
     .filter(Boolean)

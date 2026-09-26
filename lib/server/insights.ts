@@ -6,7 +6,7 @@ export const INSIGHT_COLUMNS =
 export type InsightRow = {
   id: string;
   camera_id: string;
-  kind: "daily" | "moment";
+  kind: "daily" | "moment" | "range";
   period_start: string;
   period_end: string;
   day_label: string | null;

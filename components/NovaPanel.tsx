@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Insight, InsightObservation } from "../lib/api";
 
 // Nova's insights for one camera: daily reviews (made automatically, shared
-// with the org) and on-demand looks at a single frame. Every observation
+// with the org), on-demand reviews of the selected time range, and looks at
+// a single frame. Every observation
 // cites its frames, which jump the timelapse to that moment.
 
 const CATEGORY: Record<string, string> = {
@@ -17,6 +18,16 @@ const CATEGORY: Record<string, string> = {
   image_quality: "Image",
 };
 
+const RANGE_MAX_MS = 31 * 24 * 3600_000;
+
+function spanLabel(ms: number) {
+  const h = ms / 3600_000;
+  if (h < 1.5) return `${Math.round(ms / 60_000)} min`;
+  if (h < 48) return `${Math.round(h)} hours`;
+  return `${Math.round(h / 24)} days`;
+}
+const when = (t: number) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
 const CONCERN_LABEL = { none: "Looks good", watch: "Watch", action: "Action" } as const;
 const CONCERN_TONE = { none: "ok", watch: "warn", action: "alarm" } as const;
 
@@ -27,7 +38,9 @@ export default function NovaPanel({
   loading,
   dailyBusy,
   currentTs,
+  range,
   onAsk,
+  onAnalyzeRange,
   onJumpTo,
 }: {
   open: boolean;
@@ -36,13 +49,17 @@ export default function NovaPanel({
   loading: boolean;
   dailyBusy: string | null; // label of the day being reviewed right now
   currentTs: number | null;
+  range: [number, number] | null;
   onAsk: (question: string) => Promise<void>;
+  onAnalyzeRange: (question: string) => Promise<void>;
   onJumpTo: (ts: number) => void;
 }) {
+  const [mode, setMode] = useState<"range" | "frame">("range");
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
+  const rangeTooLong = !!range && range[1] - range[0] > RANGE_MAX_MS + 3600_000;
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +73,7 @@ export default function NovaPanel({
     setAsking(true);
     setAskError(null);
     try {
-      await onAsk(question);
+      await (mode === "range" ? onAnalyzeRange(question) : onAsk(question));
       setQuestion("");
     } catch (e: any) {
       setAskError(e.message);
@@ -80,9 +97,20 @@ export default function NovaPanel({
 
         <div className="nova-scroll">
           <section className="nova-ask">
-            <div className="eyebrow">Ask about this frame</div>
-            <div className="small muted" style={{ margin: "4px 0 10px" }}>
-              {currentTs
+            <div className="seg" role="group" aria-label="What Nova analyzes" style={{ marginBottom: 10 }}>
+              <button aria-pressed={mode === "range"} onClick={() => setMode("range")}>This range</button>
+              <button aria-pressed={mode === "frame"} onClick={() => setMode("frame")}>This frame</button>
+            </div>
+            <div className="small muted" style={{ margin: "0 0 10px", lineHeight: 1.5 }}>
+              {mode === "range"
+                ? range
+                  ? <>
+                      <strong style={{ color: "var(--text)" }}>{spanLabel(range[1] - range[0])}</strong> · {when(range[0])} – {when(range[1])}
+                      <br />Frames across the whole range, read against its sensor trends.
+                      {rangeTooLong && <span style={{ color: "var(--warn)" }}><br />Nova reviews up to 31 days at a time — pick a shorter range.</span>}
+                    </>
+                  : "Pick a time range first"
+                : currentTs
                 ? new Date(currentTs).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
                 : "Pick a frame in the timelapse first"}
             </div>
@@ -91,12 +119,12 @@ export default function NovaPanel({
               rows={2}
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Optional: what should Nova look at? e.g. Is the top canopy drooping?"
+              placeholder={mode === "range" ? "Optional: e.g. How did the plants handle the heat this afternoon?" : "Optional: what should Nova look at? e.g. Is the top canopy drooping?"}
               maxLength={500}
               style={{ resize: "vertical", minHeight: 64 }}
             />
-            <button className="btn nova" style={{ marginTop: 10, width: "100%" }} disabled={!currentTs || asking} onClick={ask}>
-              {asking ? "Nova is looking…" : "Analyze this frame"}
+            <button className="btn nova" style={{ marginTop: 10, width: "100%" }} disabled={asking || (mode === "range" ? !range || rangeTooLong : !currentTs)} onClick={ask}>
+              {asking ? "Nova is looking…" : mode === "range" ? `Analyze ${range ? spanLabel(range[1] - range[0]) : "range"}` : "Analyze this frame"}
             </button>
             {askError && <div className="error-text" style={{ marginTop: 8 }}>{askError}</div>}
           </section>
@@ -113,7 +141,7 @@ export default function NovaPanel({
           ) : insights && insights.length === 0 && !dailyBusy ? (
             <div className="muted" style={{ padding: "20px 4px", fontSize: 14, lineHeight: 1.5 }}>
               No insights yet. Nova writes a daily review once a camera has a full day of frames, and you can ask
-              about any frame above.
+              about any range or frame above.
             </div>
           ) : (
             insights?.filter((i) => i.status !== "running" || i.kind === "moment").map((i) => (
@@ -132,7 +160,9 @@ export default function NovaPanel({
 
 function InsightCard({ insight: i, onJumpTo }: { insight: Insight; onJumpTo: (ts: number) => void }) {
   const title =
-    i.kind === "daily"
+    i.kind === "range"
+      ? `${spanLabel(i.periodEnd - i.periodStart)} · ${when(i.periodStart)} – ${when(i.periodEnd)}`
+      : i.kind === "daily"
       ? `Daily review · ${i.day ? new Date(i.day + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) : ""}`
       : `Frame · ${new Date(i.periodEnd).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
 
