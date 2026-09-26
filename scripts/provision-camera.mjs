@@ -108,7 +108,11 @@ CAMERA SETTINGS (Reolink web UI → Settings)
     Upload ............... Pictures only, no video
     Interval / schedule .. every ${minutes} minute${minutes === 1 ? "" : "s"}, all day
     Picture resolution ... 1920×1080 (substream is too small, 4K is 13 GB/mo)
-  System → Date & Time → NTP: on
+  System → Date & Time
+    Time zone ............ the customer site's zone (ask sales if unknown)
+    Daylight saving ...... ON (auto) — otherwise the time stamped on every
+                           picture is an hour off for half the year
+    NTP .................. on (pool.ntp.org)
   System → User → admin: unique password (record in the warehouse vault)
   Network: DHCP (default)
 
