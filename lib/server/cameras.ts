@@ -6,7 +6,7 @@ import { getRooms, getSensors, sameId } from "../growlink";
 import type { OrgContext } from "./auth";
 
 export const CAMERA_COLUMNS =
-  "id, room_id, name, serial, interval_sec, token_hint, created_at, claimed_at, last_frame_at, last_seen_at, last_error, last_error_at, revoked_at, sensors, average_same_type";
+  "id, room_id, name, serial, interval_sec, token_hint, created_at, claimed_at, last_frame_at, last_seen_at, last_error, last_error_at, revoked_at, sensors, average_same_type, org_name, room_name";
 
 export type CameraRow = {
   id: string;
@@ -78,10 +78,11 @@ export async function loadCamera(ctx: OrgContext, cameraId: string) {
 }
 
 // A camera can only be attached to a room Growlink says is in this org.
+// Returns the room (so callers can record its name), or null.
 export async function roomInOrg(ctx: OrgContext, roomId: unknown) {
-  if (typeof roomId !== "string") return false;
+  if (typeof roomId !== "string") return null;
   const rooms = await getRooms(ctx.apiKey, ctx.orgId);
-  return rooms.some((r) => sameId(r.id, roomId));
+  return rooms.find((r) => sameId(r.id, roomId)) ?? null;
 }
 
 export function parseName(v: unknown): string | null {

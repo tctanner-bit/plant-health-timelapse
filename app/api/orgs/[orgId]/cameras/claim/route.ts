@@ -28,14 +28,16 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
     return NextResponse.json({ error: "Enter the 8-character Growlink setup code (like 7K3M-Q9XW), not the camera's UID" }, { status: 400 });
   const name = body.name === undefined || body.name === "" ? "Canopy camera" : parseName(body.name);
   if (!name) return NextResponse.json({ error: "Name must be 1–80 characters" }, { status: 400 });
-  if (!(await roomInOrg(ctx, body.roomId)))
-    return NextResponse.json({ error: "Room not found in this organization" }, { status: 400 });
+  const room = await roomInOrg(ctx, body.roomId);
+  if (!room) return NextResponse.json({ error: "Room not found in this organization" }, { status: 400 });
 
   const { data, error } = await db()
     .from("cameras")
     .update({
       org_id: ctx.orgId,
       room_id: String(body.roomId).toLowerCase(),
+      org_name: ctx.orgName,
+      room_name: room.name,
       name,
       claimed_at: new Date().toISOString(),
       claim_code_hash: null,

@@ -33,10 +33,11 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
   let roomId = cam.room_id;
   if (body.roomId !== undefined && String(body.roomId).toLowerCase() !== cam.room_id) {
-    if (!(await roomInOrg(ctx, body.roomId)))
-      return NextResponse.json({ error: "Room not found in this organization" }, { status: 400 });
+    const room = await roomInOrg(ctx, body.roomId);
+    if (!room) return NextResponse.json({ error: "Room not found in this organization" }, { status: 400 });
     roomId = String(body.roomId).toLowerCase();
     patch.room_id = roomId;
+    patch.room_name = room.name;
     // The old room's sensors don't belong to the new room.
     patch.sensors = [];
   }
