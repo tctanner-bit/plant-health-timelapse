@@ -28,6 +28,16 @@ export type Observation = {
   frames: { id: number; ts: number; label: string }[];
   sensors: string[];
 };
+export type NovaUsage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  usageId: number | null;
+};
+
+// Tags the proxy records against this call in the Growlink AI usage ledger.
+export type UsageTags = { orgId: string; orgName: string | null; feature: string; ref: string };
+
 export type NovaResult = {
   headline: string;
   concern: Concern;
@@ -37,6 +47,7 @@ export type NovaResult = {
   frames: FrameRef[];
   sensorSummary: SensorSummary[];
   model: string | null;
+  usage: NovaUsage;
 };
 
 type SensorSummary = {
@@ -205,7 +216,7 @@ const SCHEMA = {
   },
 } as const;
 
-async function callNova(context: string, images: { label: string; url: string; detail: "low" | "high" }[]) {
+async function callNova(context: string, images: { label: string; url: string; detail: "low" | "high" }[], tags: UsageTags) {
   const key = process.env.NOVA_SERVICE_KEY;
   if (!key) throw new NovaError("Nova isn't configured on this server yet", 503);
 
@@ -219,7 +230,15 @@ async function callNova(context: string, images: { label: string; url: string; d
   try {
     res = await fetch(`${PROXY_URL}?op=chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-service-key": key },
+      headers: {
+        "Content-Type": "application/json",
+        "x-service-key": key,
+        "x-usage-product": "plant-health",
+        "x-usage-feature": tags.feature,
+        "x-usage-org": tags.orgId,
+        ...(tags.orgName ? { "x-usage-org-name": encodeURIComponent(tags.orgName).slice(0, 120) } : {}),
+        "x-usage-ref": tags.ref,
+      },
       body: JSON.stringify({
         temperature: 0.2,
         max_tokens: 1000,
@@ -235,12 +254,28 @@ async function callNova(context: string, images: { label: string; url: string; d
     throw new NovaError("Nova didn't respond in time");
   }
   if (res.status === 401) throw new NovaError("Nova rejected this server's key", 503);
+  if (res.status === 402) {
+    const b = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new NovaError(b.error ?? "Nova's monthly limit for this organization has been reached", 402);
+  }
   if (!res.ok) throw new NovaError(`Nova is unavailable (HTTP ${res.status})`);
-  const body = (await res.json()) as { model?: string; choices?: { message?: { content?: string; refusal?: string } }[] };
+  const body = (await res.json()) as {
+    model?: string;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    choices?: { message?: { content?: string; refusal?: string } }[];
+  };
+  const cost = res.headers.get("x-ai-cost-usd");
+  const usageId = res.headers.get("x-ai-usage-id");
+  const usage: NovaUsage = {
+    inputTokens: body.usage?.prompt_tokens ?? null,
+    outputTokens: body.usage?.completion_tokens ?? null,
+    costUsd: cost != null && Number.isFinite(Number(cost)) ? Number(cost) : null,
+    usageId: usageId != null && Number.isFinite(Number(usageId)) ? Number(usageId) : null,
+  };
   const msg = body.choices?.[0]?.message;
   if (!msg?.content) throw new NovaError(msg?.refusal ? "Nova declined to analyze these frames" : "Nova returned nothing");
   try {
-    return { parsed: JSON.parse(msg.content), model: body.model ?? null };
+    return { parsed: JSON.parse(msg.content), model: body.model ?? null, usage };
   } catch {
     throw new NovaError("Nova's reply wasn't readable");
   }
@@ -248,7 +283,7 @@ async function callNova(context: string, images: { label: string; url: string; d
 
 // --------------------------------------------------------------- analyses
 
-type Ctx = { apiKey: string; orgId: string };
+type Ctx = { apiKey: string; orgId: string; orgName: string | null };
 type Cam = CameraRow;
 
 function timeFmt(tz: string | undefined) {
@@ -268,7 +303,7 @@ async function sign(paths: string[]) {
   return new Map(data.map((d) => [d.path, d.signedUrl]));
 }
 
-function finish(parsed: any, frames: FrameRef[], summary: SensorSummary[], model: string | null): NovaResult {
+function finish(parsed: any, frames: FrameRef[], summary: SensorSummary[], model: string | null, usage: NovaUsage): NovaResult {
   const byLabel = new Map(frames.map((f) => [f.label, f]));
   const labels = new Set(summary.map((s) => s.label));
   const concerns: Concern[] = ["none", "watch", "action"];
@@ -295,6 +330,7 @@ function finish(parsed: any, frames: FrameRef[], summary: SensorSummary[], model
     frames,
     sensorSummary: summary,
     model,
+    usage,
   };
 }
 
@@ -306,7 +342,7 @@ function finish(parsed: any, frames: FrameRef[], summary: SensorSummary[], model
 export async function analyzeDay(
   ctx: Ctx,
   cam: Cam,
-  opts: { start: number; end: number; tz?: string; uom?: Uom }
+  opts: { start: number; end: number; tz?: string; uom?: Uom; ref: string }
 ): Promise<NovaResult> {
   const { start, end } = opts;
   const fmt = timeFmt(opts.tz);
@@ -341,7 +377,7 @@ export async function analyzeDay(
     if (f) picked.push({ row: f, role, detail: "low" });
   }
 
-  return run(ctx, picked, summary, fmt, {
+  return run(ctx, picked, summary, fmt, { feature: "daily_review", ref: opts.ref }, {
     intro: `Daily review of camera "${cam.name}" for ${fmt(start)} – ${fmt(end)}.`,
   });
 }
@@ -354,7 +390,7 @@ export async function analyzeDay(
 export async function analyzeMoment(
   ctx: Ctx,
   cam: Cam,
-  opts: { at: number; question?: string; tz?: string; uom?: Uom }
+  opts: { at: number; question?: string; tz?: string; uom?: Uom; ref: string }
 ): Promise<NovaResult & { periodStart: number; periodEnd: number }> {
   const fmt = timeFmt(opts.tz);
   const start = opts.at - 6 * HOUR;
@@ -373,7 +409,7 @@ export async function analyzeMoment(
 
   const { summary } = await summarizeSensors(ctx.apiKey, ctx.orgId, cam, start, end, opts.uom, fmt);
   const q = opts.question?.trim().slice(0, 500);
-  const result = await run(ctx, picked, summary, fmt, {
+  const result = await run(ctx, picked, summary, fmt, { feature: "moment", ref: opts.ref }, {
     intro: `Look at camera "${cam.name}" at ${fmt(t)}. The sensor summary covers the six hours before it.`,
     question: q,
   });
@@ -381,10 +417,11 @@ export async function analyzeMoment(
 }
 
 async function run(
-  _ctx: Ctx,
+  ctx: Ctx,
   picked: { row: FrameRow; role: string; detail: "low" | "high" }[],
   summary: SensorSummary[],
   fmt: (t: number) => string,
+  tag: { feature: string; ref: string },
   extra: { intro: string; question?: string }
 ): Promise<NovaResult> {
   // Chronological labels F1, F2 … so the model can cite them.
@@ -415,6 +452,11 @@ async function run(
     .filter(Boolean)
     .join("\n\n");
 
-  const { parsed, model } = await callNova(context, images);
-  return finish(parsed, frames, summary, model);
+  const { parsed, model, usage } = await callNova(context, images, {
+    orgId: ctx.orgId,
+    orgName: ctx.orgName,
+    feature: tag.feature,
+    ref: tag.ref,
+  });
+  return finish(parsed, frames, summary, model, usage);
 }

@@ -59,7 +59,7 @@ export async function POST(req: Request, { params }: Ctx) {
     const row = await claimDaily(cam.id, ctx.orgId, day, start, end);
     if ("done" in row) return NextResponse.json({ insight: toInsight(row.done) });
 
-    return runAndStore(row.id, () => analyzeDay(ctx, cam, { start, end, tz, uom }));
+    return runAndStore(row.id, () => analyzeDay(ctx, cam, { start, end, tz, uom, ref: `camera:${cam.id};insight:${row.id}` }));
   }
 
   if (body.kind === "moment") {
@@ -91,7 +91,7 @@ export async function POST(req: Request, { params }: Ctx) {
       .single();
     if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });
 
-    return runAndStore(data.id, () => analyzeMoment(ctx, cam, { at, question, tz, uom }));
+    return runAndStore(data.id, () => analyzeMoment(ctx, cam, { at, question, tz, uom, ref: `camera:${cam.id};insight:${data.id}` }));
   }
 
   return NextResponse.json({ error: 'kind must be "daily" or "moment"' }, { status: 400 });
@@ -149,6 +149,10 @@ async function runAndStore(id: string, work: () => Promise<NovaResult & { period
         frames: r.frames,
         sensor_summary: { confidence: r.confidence, sensors: r.sensorSummary },
         model: r.model,
+        input_tokens: r.usage.inputTokens,
+        output_tokens: r.usage.outputTokens,
+        cost_usd: r.usage.costUsd,
+        usage_id: r.usage.usageId,
         completed_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -159,8 +163,8 @@ async function runAndStore(id: string, work: () => Promise<NovaResult & { period
   } catch (e) {
     const message = e instanceof NovaError ? e.message : "Nova hit an unexpected error";
     const status = e instanceof NovaError ? e.status : 500;
-    if (status === 503) {
-      // Configuration problem, not this day's data: don't block a retry.
+    if (status === 503 || status === 402) {
+      // Configuration or budget, not this day's data: don't block a retry.
       await db().from("camera_insights").delete().eq("id", id);
     } else {
       await db()

@@ -13,9 +13,9 @@ import { NextResponse } from "next/server";
 import { getOrganizations, GrowlinkError, sameId } from "../growlink";
 
 const TTL_MS = 5 * 60 * 1000;
-const cache = new Map<string, { orgIds: string[]; exp: number }>();
+const cache = new Map<string, { orgs: { id: string; name: string }[]; exp: number }>();
 
-export type OrgContext = { apiKey: string; orgId: string };
+export type OrgContext = { apiKey: string; orgId: string; orgName: string | null };
 
 export async function requireOrg(
   req: Request,
@@ -31,7 +31,7 @@ export async function requireOrg(
   if (!entry || entry.exp < Date.now()) {
     try {
       const orgs = await getOrganizations(apiKey);
-      entry = { orgIds: orgs.map((o) => o.id.toLowerCase()), exp: Date.now() + TTL_MS };
+      entry = { orgs: orgs.map((o) => ({ id: o.id.toLowerCase(), name: o.name })), exp: Date.now() + TTL_MS };
       cache.set(h, entry);
     } catch (e) {
       if (e instanceof GrowlinkError && e.status === 401)
@@ -39,10 +39,10 @@ export async function requireOrg(
       return NextResponse.json({ error: "Could not verify key with Growlink" }, { status: 502 });
     }
   }
-  if (!entry.orgIds.some((id) => sameId(id, orgId)))
-    return NextResponse.json({ error: "Not a member of this organization" }, { status: 403 });
+  const org = entry.orgs.find((o) => sameId(o.id, orgId));
+  if (!org) return NextResponse.json({ error: "Not a member of this organization" }, { status: 403 });
 
-  return { apiKey, orgId: orgId.toLowerCase() };
+  return { apiKey, orgId: orgId.toLowerCase(), orgName: org.name ?? null };
 }
 
 export const isResponse = (x: unknown): x is NextResponse => x instanceof NextResponse;
