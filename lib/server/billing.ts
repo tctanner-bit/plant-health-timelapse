@@ -137,7 +137,7 @@ export async function cameraPrice() {
 /** Copy a Stripe subscription onto its org's row. Used by the webhook. */
 export async function saveSubscription(sub: Stripe.Subscription) {
   const orgId = sub.metadata?.org_id;
-  if (!orgId) return;
+  if (!orgId || !isOurs(sub.metadata)) return;
   const item = sub.items.data[0];
   // Since API 2025-03-31 the billing period lives on the item.
   const periodEnd = (item as any)?.current_period_end ?? (sub as any).current_period_end ?? null;
@@ -195,3 +195,78 @@ export async function syncQuantity(orgId: string): Promise<void> {
 }
 
 export const hasLiveSubscription = (b: BillingRow) => !!b.stripe_subscription_id && !!b.status && LIVE_STATUSES.has(b.status);
+
+// Growlink's Stripe account also bills Growlink's own subscriptions, often on
+// the same customers. Only objects tagged with this app are ours to touch.
+export const isOurs = (meta: Stripe.Metadata | null | undefined) => meta?.app === APP;
+
+// ------------------------------------------------ existing Growlink customers
+
+export const ORG_META = "growlink_org_id";
+
+export type Card = { brand: string; last4: string; expMonth: number; expYear: number; paymentMethodId: string };
+
+const cardCache = new Map<string, { card: Card | null; at: number }>();
+/** The card an existing customer already pays Growlink with, if any (cached 10 min). */
+export async function cardOnFile(customerId: string, fresh = false): Promise<Card | null> {
+  const hit = cardCache.get(customerId);
+  if (!fresh && hit && Date.now() - hit.at < 10 * 60_000) return hit.card;
+  const c = await stripe().customers.retrieve(customerId, { expand: ["invoice_settings.default_payment_method"] });
+  let pm: Stripe.PaymentMethod | null = null;
+  if (!("deleted" in c && c.deleted)) {
+    const d = (c as Stripe.Customer).invoice_settings?.default_payment_method;
+    if (d && typeof d !== "string" && d.type === "card") pm = d;
+    if (!pm) pm = (await stripe().paymentMethods.list({ customer: customerId, type: "card", limit: 1 })).data[0] ?? null;
+  }
+  const card = pm?.card
+    ? { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year, paymentMethodId: pm.id }
+    : null;
+  cardCache.set(customerId, { card, at: Date.now() });
+  return card;
+}
+
+/**
+ * Point the org at an existing Stripe customer (its Growlink billing record)
+ * and tag that customer with the org id, so it's found automatically later.
+ * Metadata updates merge: Growlink's own keys on the customer are kept.
+ */
+export async function linkCustomer(orgId: string, customerId: string): Promise<void> {
+  const c = await stripe().customers.retrieve(customerId);
+  if ("deleted" in c && c.deleted) throw new BillingError("That Stripe customer was deleted", 404);
+  const other = (c as Stripe.Customer).metadata?.[ORG_META];
+  if (other && other !== orgId) throw new BillingError("That Stripe customer is already linked to another organization", 409);
+  const { error } = await db()
+    .from("org_billing")
+    .update({ stripe_customer_id: customerId, updated_at: new Date().toISOString() })
+    .eq("org_id", orgId)
+    .eq("app", APP);
+  if (error) {
+    if (error.code === "23505") throw new BillingError("That Stripe customer is already linked to another organization", 409);
+    throw new BillingError("Database error", 500);
+  }
+  await stripe().customers.update(customerId, { metadata: { [ORG_META]: orgId } });
+  cardCache.delete(customerId);
+}
+
+const searched = new Map<string, number>();
+/**
+ * An org with no customer yet: look for a Growlink customer already tagged
+ * with its id (by support, or by Growlink's admin system) and link it.
+ * Searches at most every 10 minutes per org.
+ */
+export async function autoLinkCustomer(b: BillingRow): Promise<BillingRow> {
+  if (b.stripe_customer_id || !billingConfigured()) return b;
+  const last = searched.get(b.org_id) ?? 0;
+  if (Date.now() - last < 10 * 60_000) return b;
+  searched.set(b.org_id, Date.now());
+  try {
+    const found = await stripe().customers.search({ query: `metadata['${ORG_META}']:'${b.org_id}'`, limit: 1 });
+    const c = found.data[0];
+    if (!c) return b;
+    await linkCustomer(b.org_id, c.id);
+    return { ...b, stripe_customer_id: c.id };
+  } catch (e) {
+    console.error("billing: customer auto-link failed", b.org_id, e instanceof Error ? e.message : e);
+    return b;
+  }
+}

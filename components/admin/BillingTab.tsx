@@ -38,6 +38,7 @@ export default function BillingTab() {
   const [orgs, setOrgs] = useState<OrgBilling[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [linking, setLinking] = useState<OrgBilling | null>(null);
 
   const load = useCallback(() => {
     adminFetch<{ orgs: OrgBilling[] }>("/api/admin/billing")
@@ -115,6 +116,7 @@ export default function BillingTab() {
                     : "—"}
                 </td>
                 <td className="small">
+                  {o.stripeCustomerId && <div className="small muted">{o.stripeCustomerId}</div>}
                   {o.stripeCustomerId ? (
                     <a href={`https://dashboard.stripe.com/customers/${o.stripeCustomerId}`} target="_blank" rel="noopener noreferrer">
                       {o.status ?? "customer"} ↗
@@ -128,6 +130,11 @@ export default function BillingTab() {
                     {!o.status && !o.comp && (
                       <button className="btn" disabled={busy === o.orgId} onClick={() => extend(o)}>Extend trial</button>
                     )}
+                    {!o.status || ["canceled", "incomplete_expired"].includes(o.status) ? (
+                      <button className="btn" disabled={busy === o.orgId} onClick={() => setLinking(o)}>
+                        {o.stripeCustomerId ? "Change customer" : "Link customer"}
+                      </button>
+                    ) : null}
                     {o.comp ? (
                       <button className="btn" disabled={busy === o.orgId} onClick={() => act(o, { action: "uncomp" })}>End comp</button>
                     ) : (
@@ -140,10 +147,133 @@ export default function BillingTab() {
           </tbody>
         </table>
       </div>
+      {linking && (
+        <LinkCustomer
+          org={linking}
+          onClose={() => setLinking(null)}
+          onLink={async (customerId) => {
+            await adminFetch("/api/admin/billing", { method: "POST", body: { orgId: linking.orgId, action: "link_customer", customerId } });
+            setLinking(null);
+            load();
+          }}
+          onUnlink={async () => {
+            await adminFetch("/api/admin/billing", { method: "POST", body: { orgId: linking.orgId, action: "unlink_customer" } });
+            setLinking(null);
+            load();
+          }}
+        />
+      )}
       <p className="small" style={{ color: "var(--dim)", lineHeight: 1.5 }}>
-        Refunds, credits and cancellations are done in the Stripe dashboard; changes show here within seconds.
+        Link each organization to the Stripe customer it already pays Growlink with; it can then subscribe with that
+        card in one click, on its own Plant Health AI invoice. Refunds, credits and cancellations are done in the Stripe dashboard; changes show here within seconds.
         A complimentary org with a paid subscription is still billed by Stripe — cancel it there.
       </p>
+    </div>
+  );
+}
+
+type FoundCustomer = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  growlinkName: string | null;
+  linkedOrg: string | null;
+  hasCard: boolean;
+  created: number;
+};
+
+// Search Growlink's Stripe customers by name, email or cus_ id and link one.
+function LinkCustomer({
+  org,
+  onClose,
+  onLink,
+  onUnlink,
+}: {
+  org: OrgBilling;
+  onClose: () => void;
+  onLink: (customerId: string) => Promise<void>;
+  onUnlink: () => Promise<void>;
+}) {
+  const [q, setQ] = useState(org.orgName ?? "");
+  const [found, setFound] = useState<FoundCustomer[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const search = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await adminFetch<{ customers: FoundCustomer[] }>(`/api/admin/billing/customers?q=${encodeURIComponent(q)}`);
+      setFound(r.customers);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+    } catch (e: any) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (q.trim().length >= 2) search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal card" role="dialog" aria-modal="true" aria-label="Link Stripe customer" style={{ maxWidth: 640, padding: 22 }}>
+        <div className="row" style={{ marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div className="eyebrow">Link Stripe customer</div>
+            <div style={{ fontWeight: 800, fontSize: 18, marginTop: 4 }}>{org.orgName ?? org.orgId}</div>
+          </div>
+          <button className="btn icon ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <form onSubmit={search} className="row" style={{ gap: 8 }}>
+          <input className="field" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Customer name, email, or cus_…" autoFocus />
+          <button className="btn" disabled={busy || q.trim().length < 2}>Search</button>
+        </form>
+        {err && <div className="error-text" style={{ marginTop: 10 }}>{err}</div>}
+        <div className="stack" style={{ gap: 8, marginTop: 14, maxHeight: 380, overflow: "auto" }}>
+          {found?.length === 0 && <div className="muted small">No customers match. Try part of the name, the billing email, or paste the cus_ id.</div>}
+          {found?.map((c) => {
+            const elsewhere = c.linkedOrg && c.linkedOrg !== org.orgId;
+            const current = c.id === org.stripeCustomerId;
+            return (
+              <div key={c.id} className="row" style={{ gap: 10, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: "var(--radius)" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{c.name ?? c.growlinkName ?? "(no name)"}</div>
+                  <div className="small muted">
+                    {[c.growlinkName && c.growlinkName !== c.name ? c.growlinkName : null, c.email, c.id].filter(Boolean).join(" · ")}
+                  </div>
+                  <div className="small" style={{ color: c.hasCard ? "var(--ok)" : "var(--muted)" }}>
+                    {c.hasCard ? "Card on file" : "No card on file"}
+                    {elsewhere && <span style={{ color: "var(--warn)" }}> · linked to another organization</span>}
+                  </div>
+                </div>
+                {current ? (
+                  <span className="status ok">Linked</span>
+                ) : (
+                  <button className="btn" disabled={busy || !!elsewhere} onClick={() => run(() => onLink(c.id))}>Link</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {org.stripeCustomerId && (
+          <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}>
+            <button className="btn ghost" disabled={busy} onClick={() => run(onUnlink)}>Unlink current customer</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

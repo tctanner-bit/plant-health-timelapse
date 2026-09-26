@@ -209,6 +209,7 @@ export type Billing = {
     cancelAtPeriodEnd: boolean;
   } | null;
   canManage: boolean;
+  card: { brand: string; last4: string; expMonth: number; expYear: number } | null;
 };
 
 export const getBilling = (key: string, orgId: string) => call<Billing>(key, `/api/orgs/${orgId}/billing`);
@@ -218,3 +219,9 @@ export const startCheckout = (key: string, orgId: string) =>
   call<{ url: string }>(key, `/api/orgs/${orgId}/billing/checkout`, { method: "POST", body: {} }).then((r) => r.url);
 export const openBillingPortal = (key: string, orgId: string) =>
   call<{ url: string }>(key, `/api/orgs/${orgId}/billing/portal`, { method: "POST", body: {} }).then((r) => r.url);
+
+// Subscribe with the card the org already pays Growlink with.
+export const subscribeWithCardOnFile = (key: string, orgId: string) =>
+  call<{ ok: true }>(key, `/api/orgs/${orgId}/billing/subscribe`, { method: "POST", body: {} });
+export const setCancelAtPeriodEnd = (key: string, orgId: string, cancel: boolean) =>
+  call<{ ok: true }>(key, `/api/orgs/${orgId}/billing/cancel`, { method: "POST", body: { resume: !cancel } });

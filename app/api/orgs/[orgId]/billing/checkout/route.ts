@@ -34,11 +34,12 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
 
     const s = stripe();
     let customer = b.stripe_customer_id;
+    const created = !customer;
     if (!customer) {
       const c = await s.customers.create(
         {
           name: ctx.orgName ?? undefined,
-          metadata: { org_id: ctx.orgId, org_name: ctx.orgName ?? "", app: APP },
+          metadata: { org_id: ctx.orgId, growlink_org_id: ctx.orgId, org_name: ctx.orgName ?? "", app: APP },
         },
         { idempotencyKey: `customer:${APP}:${ctx.orgId}` }
       );
@@ -60,7 +61,9 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
       payment_method_collection: "always",
       allow_promotion_codes: true,
       billing_address_collection: "auto",
-      customer_update: { name: "auto", address: "auto" },
+      // Only for customers we just made: never overwrite an existing Growlink
+      // customer's billing name or address from this checkout.
+      ...(created ? { customer_update: { name: "auto" as const, address: "auto" as const } } : {}),
       subscription_data: {
         metadata: meta,
         ...(trialEnd - Date.now() > MIN_TRIAL_MS ? { trial_end: Math.floor(trialEnd / 1000) } : {}),

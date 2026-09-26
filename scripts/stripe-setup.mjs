@@ -85,12 +85,16 @@ let portal = configs.data.find((c) => c.metadata?.app === APP);
 const portalSettings = {
   business_profile: { headline: "Plant Health AI — manage your subscription" },
   default_return_url: `${appUrl}/billing/done?status=portal`,
+  // Customers are often Growlink's existing billing records, with Growlink
+  // subscriptions on them. The portal shows every subscription a customer
+  // has, so it may only update the card and show invoices: cancelling Plant
+  // Health AI happens in the app (it touches only its own subscription), and
+  // the customer's name, email and address stay Growlink's to manage.
   features: {
     payment_method_update: { enabled: true },
     invoice_history: { enabled: true },
-    customer_update: { enabled: true, allowed_updates: ["email", "address", "name", "tax_id"] },
-    subscription_cancel: { enabled: true, mode: "at_period_end", cancellation_reason: { enabled: true, options: ["too_expensive", "unused", "missing_features", "switched_service", "other"] } },
-    // Camera count follows the cameras in the app; customers don't edit it here.
+    customer_update: { enabled: false },
+    subscription_cancel: { enabled: false },
     subscription_update: { enabled: false },
   },
   metadata: { app: APP },
@@ -124,8 +128,13 @@ if (hook) {
 }
 
 console.log(`
-Next, in Vercel → timelapse-web → Settings → Environment Variables (Production):
-  STRIPE_SECRET_KEY       the same key you ran this with
+Next, create a restricted key for the app (Developers → API keys → Create
+restricted key) with: Customers Write, Checkout Sessions Write,
+Subscriptions Write, Customer portal Write, Products Read, Prices Read,
+PaymentMethods Read; everything else None.
+
+Then in Vercel → timelapse-web → Settings → Environment Variables (Production):
+  STRIPE_SECRET_KEY       the restricted key (not the one you ran this with)
   STRIPE_WEBHOOK_SECRET   from above
 Then redeploy. Product: ${productId} · Portal: ${portal.id}
 `);

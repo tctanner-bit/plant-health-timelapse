@@ -70,7 +70,7 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 |---|---|
 | `SUPABASE_URL` | Vercel, server only. `https://uqbfrvtiwxukqpaxczmq.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel, server only, **never** `NEXT_PUBLIC_`. Also needed at the warehouse for provisioning |
-| `STRIPE_SECRET_KEY` | Vercel, server only. Test key first; billing stays off (nobody locked out) until set |
+| `STRIPE_SECRET_KEY` | Vercel, server only. A restricted key (Customers, Checkout Sessions, Subscriptions, Customer portal: write; Products, Prices, PaymentMethods: read). Billing stays off (nobody locked out) until set |
 | `STRIPE_WEBHOOK_SECRET` | Vercel, server only. Printed once by `scripts/stripe-setup.mjs` |
 
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are left over
@@ -152,8 +152,18 @@ a 30-day trial that needs no card. Nova is included, free during beta.
 - Checkout and the billing portal are Stripe-hosted and open in a new tab
   (they refuse to load inside the Growlink frame); `/billing/done` is where
   they return.
-- Support: fleet dashboard → Billing (make free, extend trial). Refunds and
-  cancellations are done in Stripe.
+- **Existing Growlink customers**: support links an org to the Stripe
+  customer it already pays Growlink with (fleet dashboard → Billing → Link
+  customer); the customer is tagged `growlink_org_id`, which is also how
+  orgs are linked automatically if Growlink's admin system sets it. The org
+  can then subscribe with that card in one click. Plant Health AI is its own
+  subscription and invoice; Growlink's subscriptions are never touched, and
+  the webhook ignores anything not tagged `app=plant-health`.
+- The billing portal only updates the card and shows invoices; cancelling
+  is in the app, since the portal would also list the customer's Growlink
+  subscriptions.
+- Support: fleet dashboard → Billing (link customer, make free, extend
+  trial). Refunds are done in Stripe.
 
 Setup (test mode first, then again with the live key):
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Billing, openBillingPortal, startCheckout } from "../lib/api";
+import { Billing, openBillingPortal, setCancelAtPeriodEnd, startCheckout, subscribeWithCardOnFile } from "../lib/api";
 
 // Plan, trial and subscription for the org. Checkout and the billing portal
 // are Stripe-hosted and open in a new tab (they can't run inside the Growlink
@@ -65,6 +65,31 @@ export default function BillingView({
   };
   const checkout = () => go(() => startCheckout(apiKey, orgId));
   const portal = () => go(() => openBillingPortal(apiKey, orgId));
+  // Actions that finish here, without Stripe's pages.
+  const inPlace = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+      onRefresh();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const card = b.card;
+  const cardLabel = card ? `${card.brand.charAt(0).toUpperCase() + card.brand.slice(1)} •••• ${card.last4}` : "";
+  const subscribeOnFile = () => {
+    const when = b.state === "trial" && b.daysLeft ? `on ${date(b.trialEndsAt)}` : "today";
+    if (window.confirm(`Subscribe to Plant Health AI for ${qty} camera${qty === 1 ? "" : "s"} (${monthly ?? unit + " each"}/month) using ${cardLabel}? First charge ${when}.`))
+      inPlace(() => subscribeWithCardOnFile(apiKey, orgId));
+  };
+  const cancel = () => {
+    if (window.confirm("Cancel Plant Health AI at the end of this billing period? Your cameras keep recording; viewing and Nova stop when it ends."))
+      inPlace(() => setCancelAtPeriodEnd(apiKey, orgId, true));
+  };
+  const resume = () => inPlace(() => setCancelAtPeriodEnd(apiKey, orgId, false));
 
   return (
     <div className="stack" style={{ gap: 18, maxWidth: 720 }}>
@@ -122,7 +147,9 @@ export default function BillingView({
         {b.state === "trial" && !live && (
           <p className="small muted" style={{ lineHeight: 1.5 }}>
             {b.daysLeft === 0 ? "Your trial ends today." : `${b.daysLeft} day${b.daysLeft === 1 ? "" : "s"} left in your ${b.trialDays}-day trial.`}{" "}
-            Add a payment method now and you won&apos;t be charged until the trial ends.
+            {card
+              ? <>Subscribe with the card Growlink already has on file and you won&apos;t be charged until the trial ends.</>
+              : <>Add a payment method now and you won&apos;t be charged until the trial ends.</>}
           </p>
         )}
         {b.state === "past_due" && (
@@ -132,7 +159,7 @@ export default function BillingView({
         )}
         {sub?.cancelAtPeriodEnd && sub.currentPeriodEnd && (
           <p className="small" style={{ color: "var(--warn)", lineHeight: 1.5 }}>
-            Your subscription is set to end on {date(sub.currentPeriodEnd)}. You can resume it from Manage billing.
+            Your subscription is set to end on {date(sub.currentPeriodEnd)}.
           </p>
         )}
         {b.state === "comp" && (
@@ -144,15 +171,26 @@ export default function BillingView({
             <span className="small muted">Online billing isn&apos;t set up yet. Contact Growlink to subscribe.</span>
           ) : (
             <>
+              {!live && b.state !== "comp" && card && (
+                <button className="btn accent" disabled={busy} onClick={subscribeOnFile}>
+                  {busy ? "Working…" : `Subscribe with ${cardLabel}`}
+                </button>
+              )}
               {!live && b.state !== "comp" && (
-                <button className="btn accent" disabled={busy} onClick={checkout}>
-                  {busy ? "Opening…" : b.entitled ? "Add payment method" : "Subscribe"}
+                <button className={`btn${card ? "" : " accent"}`} disabled={busy} onClick={checkout}>
+                  {busy && !card ? "Opening…" : card ? "Use a different card" : b.entitled ? "Add payment method" : "Subscribe"}
                 </button>
               )}
               {b.canManage && (
-                <button className={`btn${live ? " accent" : ""}`} disabled={busy} onClick={portal}>
-                  Manage billing
+                <button className="btn" disabled={busy} onClick={portal}>
+                  Cards &amp; invoices
                 </button>
+              )}
+              {live && !sub?.cancelAtPeriodEnd && (
+                <button className="btn ghost" disabled={busy} onClick={cancel}>Cancel subscription</button>
+              )}
+              {live && sub?.cancelAtPeriodEnd && (
+                <button className="btn accent" disabled={busy} onClick={resume}>Keep my subscription</button>
               )}
             </>
           )}

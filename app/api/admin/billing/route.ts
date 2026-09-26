@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { audit, isAdminResponse, requireAdmin } from "../../../../lib/server/admin";
 import { db } from "../../../../lib/server/supabase";
-import { APP, BillingRow, access } from "../../../../lib/server/billing";
+import { APP, BillingError, BillingRow, ORG_META, access, hasLiveSubscription, linkCustomer, stripe } from "../../../../lib/server/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +38,7 @@ export async function GET(req: Request) {
   });
 }
 
-// POST { orgId, action: "comp" | "uncomp" | "extend_trial", note?, days? }
+// POST { orgId, action: "comp" | "uncomp" | "extend_trial" | "link_customer" | "unlink_customer", note?, days?, customerId? }
 export async function POST(req: Request) {
   const ctx = await requireAdmin(req);
   if (isAdminResponse(ctx)) return ctx;
@@ -81,6 +81,31 @@ export async function POST(req: Request) {
       await set({ trial_ends_at: until });
       await audit(ctx, "billing_extend_trial", null, { orgId, orgName: row.org_name, days, until });
       return NextResponse.json({ ok: true, trialEndsAt: until });
+    }
+    case "link_customer": {
+      // Bill the org on the Stripe customer (and card) it already pays Growlink with.
+      const customerId = String(body.customerId ?? "");
+      if (!/^cus_[A-Za-z0-9]+$/.test(customerId)) return NextResponse.json({ error: "Pick a Stripe customer" }, { status: 400 });
+      if (hasLiveSubscription(row) && row.stripe_customer_id !== customerId)
+        return NextResponse.json({ error: "This organization has an active subscription on another customer — cancel it first" }, { status: 409 });
+      try {
+        await linkCustomer(orgId, customerId);
+      } catch (e) {
+        if (e instanceof BillingError) return NextResponse.json({ error: e.message }, { status: e.status });
+        throw e;
+      }
+      await audit(ctx, "billing_link_customer", null, { orgId, orgName: row.org_name, customerId, previous: row.stripe_customer_id });
+      return NextResponse.json({ ok: true });
+    }
+    case "unlink_customer": {
+      if (!row.stripe_customer_id) return NextResponse.json({ error: "Not linked" }, { status: 409 });
+      if (hasLiveSubscription(row))
+        return NextResponse.json({ error: "Cancel the Plant Health AI subscription before unlinking" }, { status: 409 });
+      // Remove our tag from the customer (empty string deletes a metadata key).
+      await stripe().customers.update(row.stripe_customer_id, { metadata: { [ORG_META]: "" } }).catch(() => undefined);
+      await set({ stripe_customer_id: null, stripe_subscription_id: null, status: null, quantity: null, current_period_end: null, cancel_at_period_end: false });
+      await audit(ctx, "billing_unlink_customer", null, { orgId, orgName: row.org_name, customerId: row.stripe_customer_id });
+      return NextResponse.json({ ok: true });
     }
   }
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
