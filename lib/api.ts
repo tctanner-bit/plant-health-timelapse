@@ -36,11 +36,17 @@ export class ApiError extends Error {
 // Screens listen for this to switch to the Billing tab.
 export const BILLING_REQUIRED_EVENT = "phai:billing-required";
 
+function clientTz(): string | null {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { return null; }
+}
+
 async function call<T>(apiKey: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(path, {
     method: init.method ?? "GET",
     headers: {
       "X-Growlink-Key": apiKey,
+      // For server-side daily reviews: when this org's day ends.
+      ...(clientTz() ? { "X-Client-TZ": clientTz()! } : {}),
       ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
@@ -137,12 +143,12 @@ export type InsightObservation = {
 export type Insight = {
   id: string;
   cameraId: string;
-  kind: "daily" | "moment" | "range";
+  kind: "daily" | "moment" | "range" | "alert";
   periodStart: number;
   periodEnd: number;
   day: string | null;
   question: string | null;
-  status: "running" | "ready" | "failed";
+  status: "queued" | "running" | "ready" | "failed";
   headline: string | null;
   concern: "none" | "watch" | "action" | null;
   confidence: "low" | "medium" | "high" | null;
@@ -151,6 +157,7 @@ export type Insight = {
   frames: InsightFrame[];
   error: string | null;
   createdAt: string;
+  trigger: { kind: string; label: string; detail?: string } | null;
 };
 export type LatestInsight = { id: string; kind: string; concern: string | null; headline: string | null; createdAt: string };
 
@@ -225,3 +232,19 @@ export const subscribeWithCardOnFile = (key: string, orgId: string) =>
   call<{ ok: true }>(key, `/api/orgs/${orgId}/billing/subscribe`, { method: "POST", body: {} });
 export const setCancelAtPeriodEnd = (key: string, orgId: string, cancel: boolean) =>
   call<{ ok: true }>(key, `/api/orgs/${orgId}/billing/cancel`, { method: "POST", body: { resume: !cancel } });
+
+// ------------------------------------------------------ background monitoring
+
+export type MonitoringStatus = {
+  available: boolean; // server can store keys at all
+  enabled: boolean;
+  hasKey: boolean;
+  keyHint: string | null;
+  storedAt: string | null;
+  lastUsedAt: string | null;
+  lastError: string | null;
+  alertsPerDay: number;
+};
+export const getMonitoring = (key: string, orgId: string) => call<MonitoringStatus>(key, `/api/orgs/${orgId}/monitoring`);
+export const setMonitoring = (key: string, orgId: string, enabled: boolean) =>
+  call<MonitoringStatus>(key, `/api/orgs/${orgId}/monitoring`, { method: "POST", body: { enabled } });

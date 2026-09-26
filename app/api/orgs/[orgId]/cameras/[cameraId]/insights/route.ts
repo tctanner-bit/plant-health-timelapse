@@ -3,7 +3,7 @@ import { requireEntitled } from "../../../../../../../lib/server/billing";
 import { requireOrg, isResponse } from "../../../../../../../lib/server/auth";
 import { db } from "../../../../../../../lib/server/supabase";
 import { loadCamera } from "../../../../../../../lib/server/cameras";
-import { INSIGHT_COLUMNS, InsightRow, toInsight } from "../../../../../../../lib/server/insights";
+import { INSIGHT_COLUMNS, InsightRow, completeInsight, toInsight } from "../../../../../../../lib/server/insights";
 import { NovaError, NovaResult, RANGE_MAX_MS, RANGE_MIN_MS, analyzeDay, analyzeMoment, analyzeRange } from "../../../../../../../lib/server/nova";
 import type { Uom } from "../../../../../../../lib/growlink";
 
@@ -163,6 +163,7 @@ async function claimDaily(cameraId: string, orgId: string, day: string, start: n
   const age = Date.now() - new Date(row.created_at).getTime();
   if (row.status === "ready") return { done: row };
   if (row.status === "running" && age < RUNNING_STALE_MS) return { done: row };
+  if (row.status === "queued") return { done: row }; // the background worker has it
   if (row.status === "failed" && age < FAILED_RETRY_MS) return { done: row };
 
   await db()
@@ -172,43 +173,8 @@ async function claimDaily(cameraId: string, orgId: string, day: string, start: n
   return { id: row.id };
 }
 
-async function runAndStore(id: string, work: () => Promise<NovaResult & { periodStart?: number; periodEnd?: number }>) {
-  try {
-    const r = await work();
-    const { data, error } = await db()
-      .from("camera_insights")
-      .update({
-        status: "ready",
-        headline: r.headline,
-        concern: r.concern,
-        observations: r.observations,
-        suggestions: r.suggestions,
-        frames: r.frames,
-        sensor_summary: { confidence: r.confidence, sensors: r.sensorSummary },
-        model: r.model,
-        input_tokens: r.usage.inputTokens,
-        output_tokens: r.usage.outputTokens,
-        cost_usd: r.usage.costUsd,
-        usage_id: r.usage.usageId,
-        completed_at: new Date().toISOString(),
-      })
-      .eq("id", id)
-      .select(INSIGHT_COLUMNS)
-      .single();
-    if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });
-    return NextResponse.json({ insight: toInsight(data as InsightRow) });
-  } catch (e) {
-    const message = e instanceof NovaError ? e.message : "Nova hit an unexpected error";
-    const status = e instanceof NovaError ? e.status : 500;
-    if (status === 503 || status === 402) {
-      // Configuration or budget, not this day's data: don't block a retry.
-      await db().from("camera_insights").delete().eq("id", id);
-    } else {
-      await db()
-        .from("camera_insights")
-        .update({ status: "failed", error: message, completed_at: new Date().toISOString() })
-        .eq("id", id);
-    }
-    return NextResponse.json({ error: message }, { status });
-  }
+async function runAndStore(id: string, work: () => Promise<NovaResult>) {
+  const r = await completeInsight(id, work);
+  if ("error" in r) return NextResponse.json({ error: r.error }, { status: r.status });
+  return NextResponse.json({ insight: toInsight(r.row) });
 }

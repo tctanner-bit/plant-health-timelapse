@@ -3,6 +3,7 @@ import { requireOrg, isResponse } from "../../../../../lib/server/auth";
 import { db } from "../../../../../lib/server/supabase";
 import { CAMERA_COLUMNS, CameraRow, toCamera } from "../../../../../lib/server/cameras";
 import { getRooms, sameId } from "../../../../../lib/growlink";
+import { rememberKey } from "../../../../../lib/server/monitoring";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  // Keep the key for background Nova (unless the org turned it off).
+  await rememberKey(ctx.orgId, ctx.apiKey, req.headers.get("x-client-tz"));
 
   const { data, error } = await db()
     .from("cameras")

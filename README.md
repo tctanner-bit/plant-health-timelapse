@@ -71,6 +71,7 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 | `SUPABASE_URL` | Vercel, server only. `https://uqbfrvtiwxukqpaxczmq.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel, server only, **never** `NEXT_PUBLIC_`. Also needed at the warehouse for provisioning |
 | `STRIPE_SECRET_KEY` | Vercel, server only. A restricted key (Customers, Checkout Sessions, Subscriptions, Customer portal: write; Products, Prices, PaymentMethods: read). Billing stays off (nobody locked out) until set |
+| `CREDENTIALS_KEY` | Vercel, server only. 32 random bytes, base64 — encrypts stored Growlink keys for background Nova. Without it, background checks use frames only |
 | `STRIPE_WEBHOOK_SECRET` | Vercel, server only. Printed once by `scripts/stripe-setup.mjs` |
 
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are left over
@@ -172,3 +173,31 @@ Setup (test mode first, then again with the live key):
 It creates the product, the `plant_health_camera_monthly` price, a billing
 portal configuration of its own and the webhook, and prints the webhook
 signing secret once.
+
+## Background Nova
+
+Nova watches every room without anyone having the app open: triggered
+reviews plus the daily review, both run server-side.
+
+- **Scheduler**: pg_cron in the Plant Health Camera database calls
+  `POST /api/jobs/watch` every 5 minutes and `POST /api/jobs/nova` every
+  minute (via pg_net). Both are safe to call: a lock allows one watch run at
+  a time, and they return only counts.
+- **Watchers** (no AI, `lib/server/watch.ts`): for each camera's newest
+  frame, brightness / infrared / a 32×18 thumbnail (`camera_frame_stats`)
+  → lights on/off differently from the same time yesterday, or a big visual
+  change vs an hour ago while lit. Live sensors (averaged per metric) →
+  temperature, humidity, VPD, CO₂, pH outside broad bands, or fast swings in
+  temperature/humidity. A condition must hold on two checks in a row.
+- **Triggers** queue one `alert` insight (Nova reviews the last 3 hours with
+  the trigger as its question). Caps: 6 alerts per camera per day, the same
+  trigger at most once every 3 hours. Every trip is logged in
+  `camera_events` for tuning thresholds.
+- **Daily review** is queued after 1 am in the org's time zone (the
+  viewer's, captured with the key); the app's own trigger still works and
+  the (camera, day) index keeps it to one.
+- **Key**: the org's Growlink key is captured when someone uses the app,
+  stored AES-256-GCM encrypted (`CREDENTIALS_KEY`, org id as associated
+  data), and used only for read-only sensor calls. Orgs can turn background
+  monitoring off on the Cameras tab, which deletes it; a key Growlink rejects
+  is deleted automatically. Orgs whose trial has lapsed aren't watched.

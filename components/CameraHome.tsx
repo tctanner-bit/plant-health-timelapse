@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Camera, claimCamera, listFrames, revokeCamera, signFrames, updateCamera } from "../lib/api";
+import {
+  Camera,
+  MonitoringStatus,
+  claimCamera,
+  getMonitoring,
+  listFrames,
+  revokeCamera,
+  setMonitoring,
+  signFrames,
+  updateCamera,
+} from "../lib/api";
 import { Room, ROOM_TYPE_LABELS } from "../lib/growlink";
 import { ago, cameraStatus } from "../lib/status";
 
@@ -59,6 +69,8 @@ export default function CameraHome({
           <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
         </div>
       )}
+
+      {cameras.length > 0 && <BackgroundMonitoring apiKey={apiKey} orgId={orgId} />}
 
       {[...groups, ...(orphans.length ? [{ room: null as Room | null, cams: orphans }] : [])].map((g) => (
         <section key={g.room?.id ?? "orphans"}>
@@ -280,5 +292,63 @@ function ClaimCamera({
         <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>
       </div>
     </form>
+  );
+}
+
+// Org setting: Nova watching every room in the background. Needs the org's
+// Growlink key stored (encrypted) for read-only sensor data.
+function BackgroundMonitoring({ apiKey, orgId }: { apiKey: string; orgId: string }) {
+  const [m, setM] = useState<MonitoringStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    getMonitoring(apiKey, orgId).then(setM).catch(() => setM(null));
+  }, [apiKey, orgId]);
+  if (!m) return null;
+
+  const toggle = async () => {
+    if (m.enabled && !window.confirm("Turn off background monitoring? Nova stops watching your rooms between visits and the stored Growlink key is deleted. You can still ask Nova about any frame or time range."))
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setM(await setMonitoring(apiKey, orgId, !m.enabled));
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="row" style={{ gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div className="row" style={{ gap: 10 }}>
+            <span className="eyebrow" style={{ color: "var(--text)" }}>Nova background monitoring</span>
+            <span className={`status ${m.enabled ? "ok" : "idle"}`}>{m.enabled ? "On" : "Off"}</span>
+          </div>
+          <p className="small muted" style={{ margin: "8px 0 0", lineHeight: 1.5 }}>
+            {m.enabled ? (
+              <>
+                Every 5 minutes Nova checks each room&apos;s newest picture and sensors for lights out of schedule, sudden
+                changes and readings out of range, and reviews what it finds (up to {m.alertsPerDay} alerts per camera a
+                day), plus a review of each day.
+                {m.available && (m.hasKey
+                  ? <> Uses your Growlink key (…{m.keyHint}), stored encrypted, for read-only sensor data.</>
+                  : <> Sensor checks start the next time the app is opened with your Growlink key.</>)}
+                {m.lastError && <span style={{ color: "var(--warn)" }}> Last problem: {m.lastError}.</span>}
+              </>
+            ) : (
+              <>Nova only looks when you ask. No Growlink key is stored.</>
+            )}
+          </p>
+        </div>
+        <button className={`btn${m.enabled ? " ghost" : " accent"}`} disabled={busy} onClick={toggle}>
+          {m.enabled ? "Turn off" : "Turn on"}
+        </button>
+      </div>
+      {err && <div className="error-text" style={{ marginTop: 8 }}>{err}</div>}
+    </div>
   );
 }

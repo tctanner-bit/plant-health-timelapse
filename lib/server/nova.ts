@@ -136,7 +136,8 @@ async function summarizeSensors(
   uom: Uom | undefined,
   fmtTime: (t: number) => string
 ): Promise<{ summary: SensorSummary[]; periods: { t: number; on: boolean }[] }> {
-  if (!cam.sensors?.length) return { summary: [], periods: [] };
+  // No key (background run for an org without monitoring): frames only.
+  if (!cam.sensors?.length || !apiKey) return { summary: [], periods: [] };
   const roomSensors = await getSensors(apiKey, cam.room_id);
   const { meta } = configuredSensors(roomSensors, cam.sensors);
   if (!meta.length) return { summary: [], periods: [] };

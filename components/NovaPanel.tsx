@@ -146,7 +146,7 @@ export default function NovaPanel({
               about any range or frame above.
             </div>
           ) : (
-            insights?.filter((i) => i.status !== "running" || i.kind === "moment").map((i) => (
+            insights?.filter((i) => !(i.kind === "daily" && (i.status === "running" || i.status === "queued") && dailyBusy)).map((i) => (
               <InsightCard key={i.id} insight={i} onJumpTo={onJumpTo} />
             ))
           )}
@@ -162,16 +162,26 @@ export default function NovaPanel({
 
 function InsightCard({ insight: i, onJumpTo }: { insight: Insight; onJumpTo: (ts: number) => void }) {
   const title =
-    i.kind === "range"
+    i.kind === "alert"
+      ? `Nova alert · ${i.trigger?.label ?? "Something changed"}`
+      : i.kind === "range"
       ? `${spanLabel(i.periodEnd - i.periodStart)} · ${when(i.periodStart)} – ${when(i.periodEnd)}`
       : i.kind === "daily"
       ? `Daily review · ${i.day ? new Date(i.day + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) : ""}`
       : `Frame · ${new Date(i.periodEnd).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
 
-  if (i.status === "running") {
+  const alertLine = i.kind === "alert" ? (
+    <div className="small muted" style={{ marginTop: 6 }}>
+      {new Date(i.periodEnd).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+      {i.trigger?.detail ? ` · ${i.trigger.detail}` : ""}
+    </div>
+  ) : null;
+
+  if (i.status === "running" || i.status === "queued") {
     return (
       <div className="nova-card">
         <div className="eyebrow">{title}</div>
+        {alertLine}
         <div className="muted" style={{ marginTop: 8, fontSize: 14 }}>Nova is looking…</div>
       </div>
     );
@@ -192,7 +202,8 @@ function InsightCard({ insight: i, onJumpTo }: { insight: Insight; onJumpTo: (ts
         <div className="eyebrow" style={{ flex: 1 }}>{title}</div>
         <span className={`status ${tone}`}>{CONCERN_LABEL[i.concern ?? "none"]}</span>
       </div>
-      {i.question && <div className="small muted" style={{ marginTop: 8 }}>“{i.question}”</div>}
+      {alertLine}
+      {i.question && i.kind !== "alert" && <div className="small muted" style={{ marginTop: 8 }}>“{i.question}”</div>}
       <h3 className="nova-headline">{i.headline}</h3>
 
       {i.observations.length > 0 && (
