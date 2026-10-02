@@ -3,7 +3,9 @@
 _See every change in your canopy, and why it happened._
 
 Timelapse of a grow room's canopy, synced with that room's Growlink sensor
-history. Multi-tenant: every Growlink organization sees only its own cameras.
+history. A Growlink LABS app: **https://labs.growlink.io/plant-health/**,
+signed in with the LABS account. Multi-tenant: each connected Growlink
+organization (a *site*) sees only its own cameras.
 Cameras are plug-and-play: configured at the warehouse, plugged into PoE on
 site, and claimed in the app with the code on their sticker.
 
@@ -12,11 +14,37 @@ Reolink camera ──FTPS, every 5 min──▶ FTPS gateway ──HTTPS──�
  (pre-configured,                      (gateway/, Fly.io,       (edge function)  camera_frames
   outbound only)                        holds no secrets)                        + camera-frames bucket
                                                                                        │
-Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo) ◀──────────────┘
-        │                               verify org membership with Growlink,
-        └──────────▶ Growlink API       then read Supabase with the service key
-                     (rooms, sensors, sensor history, called directly)
+labs.growlink.io/plant-health/ ──LABS token──▶ Next.js API routes (this repo) ◀───────┘
+ (LABS rewrite → this Vercel           check the LABS user's site membership,
+  project, basePath /plant-health)     read Supabase with the service key,
+                                       call Growlink with the site's key (Vault)
 ```
+
+## Growlink LABS
+
+- **Hosting.** The LABS site (`C:Repogrowlink-labs`, `vercel.json`) rewrites
+  `/plant-health/*` to this Vercel project, which builds with
+  `basePath: "/plant-health"` and trailing slashes (LABS uses them; without
+  them the two would redirect back and forth). The bare Vercel URL redirects
+  to LABS. Listed in LABS' `site/apps.json`.
+- **Sign-in** is the LABS account (Supabase Auth in the LABS project
+  `mgenmllmciiijyeielak`). The browser shares LABS' session (localStorage
+  `growlink.labs.auth`, same origin) and sends the access token; API routes
+  check it with the LABS project (`lib/server/sites.ts`, cached 60 s).
+- **Sites.** One per Growlink organization (`sites`). An owner connects it with
+  an org-admin API key, checked with Growlink and kept in **Vault**
+  (`set_site_key` / `get_site_key`, service role only); it never reaches a
+  browser. Members (`site_members`) are owners or viewers; owners invite by
+  email (`site_invites`), accepted when that verified LABS email signs in.
+  Connecting an org that's already a site with a valid key for it makes you
+  an owner of it.
+- **Growlink data** for the browser (rooms, sensors, charts, live readings)
+  goes through `POST /api/orgs/[orgId]/growlink` with the site's key —
+  read-only operations only. A key Growlink rejects is deleted and owners are
+  asked to reconnect it in Settings.
+- **Billing** is paused while the app is in LABS beta: no Stripe keys are
+  set, so nothing is enforced and the Billing tab is hidden. The code is
+  kept for when it graduates.
 
 ## Camera lifecycle
 
@@ -43,10 +71,10 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 
 - **A tenant is a Growlink organization.** `cameras.org_id` / `room_id` are
   Growlink GUIDs, and they're null until the camera is claimed.
-- **Viewers** sign in with their Growlink API key (kept in `sessionStorage`
-  only). Every API route checks the key against Growlink
-  `GET /api/v2/organizations` (cached 5 min per key hash), refuses any org the
-  key can't see, and filters every query by `org_id`.
+- **People** sign in with their LABS account. Every API route requires a
+  membership of the site connected to the org in the URL and filters every
+  query by `org_id`; changes (claiming, managing cameras, site settings)
+  need the owner role.
 - **Cameras** authenticate with a per-camera token. It resolves to one camera
   row, which carries the org and room. The camera never names a tenant, and
   the token can't read anything.
@@ -62,7 +90,8 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 | `gateway/` | FTPS gateway for Fly.io. See [gateway/README.md](gateway/README.md) |
 | `scripts/provision-camera.mjs` | Warehouse provisioning: token, claim code, sticker, camera settings |
 | `app/api/orgs/[orgId]/cameras/…` | List, claim, rename/move, revoke, list frames, sign frame URLs |
-| `components/` | API key → org → cameras by room → player with Growlink sensor overlays |
+| `app/api/sites`, `app/api/orgs/[orgId]/site` | Connect an org, members, invites, key, background monitoring |
+| `components/` | LABS sign-in → site → Facility / Cameras / Settings → player with Growlink sensor overlays |
 
 ## Environment
 
@@ -71,7 +100,6 @@ Browser / Builder ──Growlink API key──▶ Next.js API routes (this repo)
 | `SUPABASE_URL` | Vercel, server only. `https://uqbfrvtiwxukqpaxczmq.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel, server only, **never** `NEXT_PUBLIC_`. Also needed at the warehouse for provisioning |
 | `STRIPE_SECRET_KEY` | Vercel, server only. A restricted key (Customers, Checkout Sessions, Subscriptions, Customer portal: write; Products, Prices, PaymentMethods: read). Billing stays off (nobody locked out) until set |
-| `CREDENTIALS_KEY` | Vercel, server only. 32 random bytes, base64 — encrypts stored Growlink keys for background Nova. Without it, background checks use frames only |
 | `STRIPE_WEBHOOK_SECRET` | Vercel, server only. Printed once by `scripts/stripe-setup.mjs` |
 
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are left over
@@ -180,7 +208,7 @@ Nova watches every room without anyone having the app open: triggered
 reviews plus the daily review, both run server-side.
 
 - **Scheduler**: pg_cron in the Plant Health Camera database calls
-  `POST /api/jobs/watch` every 5 minutes and `POST /api/jobs/nova` every
+  `POST /plant-health/api/jobs/watch/` every 5 minutes and `…/jobs/nova/` every
   minute (via pg_net). Both are safe to call: a lock allows one watch run at
   a time, and they return only counts.
 - **Watchers** (no AI, `lib/server/watch.ts`): for each camera's newest
@@ -196,8 +224,11 @@ reviews plus the daily review, both run server-side.
 - **Daily review** is queued after 1 am in the org's time zone (the
   viewer's, captured with the key); the app's own trigger still works and
   the (camera, day) index keeps it to one.
-- **Key**: the org's Growlink key is captured when someone uses the app,
-  stored AES-256-GCM encrypted (`CREDENTIALS_KEY`, org id as associated
-  data), and used only for read-only sensor calls. Orgs can turn background
-  monitoring off on the Cameras tab, which deletes it; a key Growlink rejects
-  is deleted automatically. Orgs whose trial has lapsed aren't watched.
+- **Key**: the site's Growlink key from Vault, used only for read-only
+  sensor calls. Only sites connected in LABS are watched; owners can turn
+  background monitoring off in Settings. A key Growlink rejects is deleted
+  and the site shows "reconnect".
+- **Small copies**: each run first makes a ~640 px copy of frames that don't
+  have one (`camera_frames.small_path`, `<frame>.sm.jpg`, newest first, up to
+  60 per run). Tiles and playback use them; the player loads full size for a
+  paused frame, and Nova always gets full size.

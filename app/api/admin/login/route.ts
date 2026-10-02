@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { STAFF_DOMAIN, isStaffEmail, onAdminList } from "../../../../lib/server/admin";
 import { db } from "../../../../lib/server/supabase";
+import { APP_URL } from "../../../../lib/labs";
 
 export const dynamic = "force-dynamic";
 
@@ -32,11 +33,10 @@ export async function POST(req: Request) {
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) return NextResponse.json({ error: "Sign-in email isn't configured" }, { status: 503 });
 
-  const origin = new URL(req.url).origin;
   const authClient = createClient(url, anon, { auth: { persistSession: false, flowType: "implicit" } });
   const { error } = await authClient.auth.signInWithOtp({
     email,
-    options: { shouldCreateUser: false, emailRedirectTo: `${origin}/admin` },
+    options: { shouldCreateUser: false, emailRedirectTo: `${APP_URL}admin/` },
   });
   if (error) {
     const rate = /rate|limit|seconds/i.test(error.message);

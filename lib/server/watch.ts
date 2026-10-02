@@ -8,6 +8,11 @@
 //                 each camera's daily review once its org's day is over.
 //   runNovaJob()  every minute. Runs one queued review.
 //
+// runWatch() also makes the small (~640 px) copy of each new frame that tiles
+// and playback use, for every camera whether or not its site is watched.
+// Only sites connected in LABS are watched; sensor data is read with the
+// site's Growlink key from Vault.
+//
 // Cost is capped per camera: at most ALERTS_PER_DAY alerts, and the same
 // trigger at most once per COOLDOWN_MS. Thresholds are first guesses;
 // every trip is logged in camera_events so they can be tuned.
@@ -15,8 +20,8 @@
 import { db, FRAMES_BUCKET } from "./supabase";
 import type { CameraRow } from "./cameras";
 import { access, billingConfigured, getBilling } from "./billing";
-import { dropRejectedKey, loadMonitoring, markKeyUsed } from "./monitoring";
-import { Lights, decodeThumb, encodeThumb, frameStats, lightsFrom, visualDifference } from "./frame-stats";
+import { markKeyUsed, rejectSiteKey, siteForOrg, siteKey } from "./sites";
+import { Lights, decodeThumb, encodeThumb, frameStats, lightsFrom, smallCopy, visualDifference } from "./frame-stats";
 import { GrowlinkError, LiveReading, getLiveSensors } from "../growlink";
 import { analyzeDay, analyzeRange } from "./nova";
 import { completeInsight } from "./insights";
@@ -114,7 +119,7 @@ async function statsNear(cameraId: string, t: number, within: number) {
 async function frameConditions(cam: Cam, tz: string | null, lastId: number | null): Promise<{ checked: boolean; frameId?: number; conds: Condition[] }> {
   const { data: f } = await db()
     .from("camera_frames")
-    .select("id, captured_at, storage_path")
+    .select("id, captured_at, storage_path, small_path")
     .eq("camera_id", cam.id)
     .order("captured_at", { ascending: false })
     .limit(1)
@@ -123,7 +128,8 @@ async function frameConditions(cam: Cam, tz: string | null, lastId: number | nul
   const t = Date.parse(f.captured_at);
   if (Date.now() - t > 30 * MIN) return { checked: false, conds: [] }; // offline: the app already shows that
 
-  const { data: blob, error } = await db().storage.from(FRAMES_BUCKET).download(f.storage_path);
+  // The small copy is plenty for a 32×18 thumbnail and a fifth of the download.
+  const { data: blob, error } = await db().storage.from(FRAMES_BUCKET).download(f.small_path ?? f.storage_path);
   if (error || !blob) return { checked: false, conds: [] };
   const s = await frameStats(Buffer.from(await blob.arrayBuffer()));
   await db().from("camera_frame_stats").upsert({
@@ -300,11 +306,50 @@ async function fire(cam: Cam, conds: Condition[]) {
   await db().from("camera_events").insert(events.map((e) => ({ ...e, insight_id: ins?.id ?? null })));
 }
 
+// Small copies for frames that don't have one yet, newest first (so new
+// frames get theirs within a run, and older ones backfill over time). A frame
+// that can't be decoded points at itself so it isn't retried forever.
+async function makeSmallCopies(deadline: number): Promise<number> {
+  const { data } = await db()
+    .from("camera_frames")
+    .select("id, storage_path")
+    .is("small_path", null)
+    .order("captured_at", { ascending: false })
+    .limit(60);
+  const todo = [...(data ?? [])];
+  let made = 0;
+  const worker = async () => {
+    for (let f = todo.shift(); f && Date.now() < deadline; f = todo.shift()) {
+      const { data: blob, error } = await db().storage.from(FRAMES_BUCKET).download(f.storage_path);
+      if (error || !blob) continue;
+      let small: Buffer;
+      try {
+        small = await smallCopy(Buffer.from(await blob.arrayBuffer()));
+      } catch {
+        await db().from("camera_frames").update({ small_path: f.storage_path }).eq("id", f.id);
+        continue;
+      }
+      const path = f.storage_path.replace(/\.jpe?g$/i, "") + ".sm.jpg";
+      const up = await db().storage.from(FRAMES_BUCKET).upload(path, small, { contentType: "image/jpeg", upsert: true });
+      if (up.error) continue;
+      await db().from("camera_frames").update({ small_path: path, small_bytes: small.length }).eq("id", f.id);
+      made++;
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return made;
+}
+
 export async function runWatch(): Promise<Record<string, unknown>> {
   const started = Date.now();
   if (!(await takeLock("watch", 4 * MIN))) return { skipped: "another run is in progress" };
-  const summary = { cameras: 0, checkedFrames: 0, checkedSensors: 0, triggers: 0, dailies: 0, orgsSkipped: 0, timedOut: false };
+  const summary = { smallCopies: 0, cameras: 0, checkedFrames: 0, checkedSensors: 0, triggers: 0, dailies: 0, orgsSkipped: 0, timedOut: false };
   try {
+    summary.smallCopies = await makeSmallCopies(started + 20_000).catch((e) => {
+      console.error("watch: small copies failed", e instanceof Error ? e.message : e);
+      return 0;
+    });
+
     const { data: cams } = await db()
       .from("cameras")
       .select("*")
@@ -323,9 +368,11 @@ export async function runWatch(): Promise<Record<string, unknown>> {
         const b = await getBilling(orgId, list[0].org_name).catch(() => null);
         if (b && !access(b).entitled) { summary.orgsSkipped++; continue; }
       }
-      const { row: mon, apiKey } = await loadMonitoring(orgId);
-      if (mon && !mon.enabled) { summary.orgsSkipped++; continue; }
-      const tz = mon?.tz ?? null;
+      // Watched only once connected in LABS, and while the site wants it.
+      const site = await siteForOrg(orgId);
+      if (!site || !site.monitoring_enabled) { summary.orgsSkipped++; continue; }
+      const apiKey = site.key_status === "ok" ? await siteKey(site.id) : null;
+      const tz = site.tz;
 
       // One batched live-data call for every sensor the org's cameras use.
       const live = new Map<string, LiveReading>();
@@ -333,9 +380,9 @@ export async function runWatch(): Promise<Record<string, unknown>> {
       if (apiKey && ids.length) {
         try {
           for (const r of await getLiveSensors(apiKey, orgId, ids)) live.set(r.sensorId.toLowerCase(), r);
-          await markKeyUsed(orgId);
+          await markKeyUsed(site.id);
         } catch (e) {
-          if (e instanceof GrowlinkError && e.status === 401) await dropRejectedKey(orgId, "Growlink rejected the stored key");
+          if (e instanceof GrowlinkError && e.status === 401) await rejectSiteKey(site.id);
           else console.error("watch: live sensors failed", orgId, e instanceof Error ? e.message : e);
         }
       }
@@ -425,9 +472,10 @@ export async function runNovaJob(): Promise<Record<string, unknown>> {
     await db().from("camera_insights").update({ status: "failed", error: "Camera no longer in this organization" }).eq("id", job.id);
     return { id: job.id, failed: true };
   }
-  const { row: mon, apiKey } = await loadMonitoring(job.org_id);
-  const ctx = { apiKey: apiKey ?? "", orgId: job.org_id as string, orgName: (cam.org_name as string | null) ?? null };
-  const tz = mon?.tz ?? undefined;
+  const site = await siteForOrg(job.org_id);
+  const apiKey = site && site.key_status === "ok" ? await siteKey(site.id) : null;
+  const ctx = { apiKey: apiKey ?? "", orgId: job.org_id as string, orgName: site?.name ?? (cam.org_name as string | null) ?? null };
+  const tz = site?.tz ?? undefined;
   const ref = `camera:${cam.id};insight:${job.id}`;
   const start = Date.parse(job.period_start);
   const end = Date.parse(job.period_end);
@@ -442,8 +490,8 @@ export async function runNovaJob(): Promise<Record<string, unknown>> {
       return await analyze(ctx);
     } catch (e) {
       // A stored key Growlink no longer accepts: drop it, review frames only.
-      if (e instanceof GrowlinkError && e.status === 401 && ctx.apiKey) {
-        await dropRejectedKey(ctx.orgId, "Growlink rejected the stored key");
+      if (e instanceof GrowlinkError && e.status === 401 && ctx.apiKey && site) {
+        await rejectSiteKey(site.id);
         return analyze({ ...ctx, apiKey: "" });
       }
       throw e;

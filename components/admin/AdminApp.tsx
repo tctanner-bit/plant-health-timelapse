@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { AdminError, FleetCamera, adminAuth, adminFetch, expectedPerDay, fleetState } from "../../lib/admin-client";
 import { ago } from "../../lib/status";
 import { Brand, Centered } from "../ui";
+import { appPath } from "../../lib/labs";
 import BillingTab from "./BillingTab";
 
 // Growlink's camera fleet dashboard: every camera across every customer, with
@@ -109,7 +110,7 @@ function SignIn({ configError }: { configError: string | null }) {
 
   // Normal path: email a one-time sign-in link (staff domain or exceptions list).
   const sendLink = async () => {
-    const res = await fetch("/api/admin/login", {
+    const res = await fetch(appPath("/api/admin/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: email.trim() }),

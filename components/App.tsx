@@ -5,44 +5,50 @@ import {
   BILLING_REQUIRED_EVENT,
   Billing,
   Camera,
+  SIGN_IN_REQUIRED_EVENT,
+  SiteSummary,
   getBilling,
+  getRooms,
   listCameras,
-  loadApiKey,
-  saveApiKey,
-  signedInByBuilder,
-  takeBuilderKey,
+  listSites,
 } from "../lib/api";
-import { Org, Room, getOrganizations, getRooms } from "../lib/growlink";
+import type { Room } from "../lib/growlink";
+import { APP_URL, appPath } from "../lib/labs";
+import { goToLabsAccount, labs, onLabsOrigin, onSessionChange } from "../lib/labs-client";
 import BillingView from "./BillingView";
 import CameraHome from "./CameraHome";
+import ConnectSite from "./ConnectSite";
 import FacilityView from "./FacilityView";
 import Player from "./Player";
+import SiteSettings from "./SiteSettings";
 import { Brand, Centered } from "./ui";
 
-// Top-level flow: API key → organization → home (Facility view or Cameras
-// management) → player. The org, home tab and camera live in the URL
-// (?org=…&view=…&camera=…) so a Builder page or a display cast can deep-link
-// straight to the facility view or one room's timelapse.
+// Top-level flow, inside Growlink LABS: LABS sign-in → site (a connected
+// Growlink organization) → home (Facility, Cameras, Settings) → player. The
+// site, tab and camera live in the URL (?org=…&view=…&camera=…) so a link can
+// go straight to the facility view or one room's timelapse.
 
-type HomeView = "facility" | "cameras" | "billing";
+type HomeView = "facility" | "cameras" | "settings" | "billing";
+const VIEWS: HomeView[] = ["facility", "cameras", "settings", "billing"];
 
-// Screens embedded in Growlink stay open for days. When a newer deployment is
-// live, reload onto it (URL state and the session key survive a reload).
+// Screens stay open for days. When a newer deployment is live, reload onto
+// it (URL state and the LABS session survive a reload).
 const BUILD = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? null;
 let lastBuildCheck = 0;
 async function checkForNewBuild() {
   if (!BUILD || Date.now() - lastBuildCheck < 5 * 60_000) return;
   lastBuildCheck = Date.now();
   try {
-    const r = await fetch("/api/version", { cache: "no-store" });
+    const r = await fetch(appPath("/api/version"), { cache: "no-store" });
     const { version } = await r.json();
     if (version && version !== BUILD) window.location.reload();
   } catch {}
 }
 
 export default function App() {
-  const [apiKey, setApiKey] = useState<string | null | undefined>(undefined);
-  const [orgs, setOrgs] = useState<Org[] | null>(null);
+  const [signedIn, setSignedIn] = useState<boolean | undefined>(undefined);
+  const [email, setEmail] = useState<string | null>(null);
+  const [sites, setSites] = useState<SiteSummary[] | null>(null);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [cameras, setCameras] = useState<Camera[] | null>(null);
@@ -50,72 +56,87 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<HomeView>("facility");
   const [claiming, setClaiming] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [billing, setBilling] = useState<Billing | null>(null);
 
-  const [builder, setBuilder] = useState(false);
-
+  // The LABS session lives on labs.growlink.io; the bare Vercel URL has none.
   useEffect(() => {
-    // First, before anything reads the URL: a key handed over by Growlink Builder.
-    const handed = takeBuilderKey();
-    const q = new URLSearchParams(window.location.search);
-    setOrgId(q.get("org"));
-    setCameraId(q.get("camera"));
-    const v = q.get("view");
-    if (v === "cameras" || v === "billing") setView(v);
-    setBuilder(signedInByBuilder());
-    setApiKey(handed ?? loadApiKey());
+    if (!onLabsOrigin()) window.location.replace(APP_URL + window.location.search);
   }, []);
 
   useEffect(() => {
-    if (apiKey === undefined) return;
+    const q = new URLSearchParams(window.location.search);
+    setOrgId(q.get("org"));
+    setCameraId(q.get("camera"));
+    const v = q.get("view") as HomeView | null;
+    if (v && VIEWS.includes(v)) setView(v);
+    labs().auth.getSession().then(({ data }) => setSignedIn(!!data.session));
+    return onSessionChange((s) => setSignedIn(!!s));
+  }, []);
+
+  // Requests refused for an expired session go back to the LABS sign-in.
+  useEffect(() => {
+    const onSignIn = () => setSignedIn(false);
+    window.addEventListener(SIGN_IN_REQUIRED_EVENT, onSignIn);
+    return () => window.removeEventListener(SIGN_IN_REQUIRED_EVENT, onSignIn);
+  }, []);
+
+  useEffect(() => {
+    if (signedIn === undefined) return;
     const q = new URLSearchParams(window.location.search);
     orgId ? q.set("org", orgId) : q.delete("org");
     cameraId ? q.set("camera", cameraId) : q.delete("camera");
     view !== "facility" ? q.set("view", view) : q.delete("view");
     const s = q.toString();
     window.history.replaceState(null, "", s ? `?${s}` : window.location.pathname);
-  }, [apiKey, orgId, cameraId, view]);
+  }, [signedIn, orgId, cameraId, view]);
+
+  const loadSites = useCallback(async (prefer?: string) => {
+    try {
+      const r = await listSites();
+      setEmail(r.user.email);
+      setSites(r.sites);
+      setOrgId((cur) => {
+        const want = prefer ?? cur;
+        return want && r.sites.some((s) => s.orgId === want.toLowerCase()) ? want.toLowerCase() : r.sites[0]?.orgId ?? null;
+      });
+    } catch (e: any) {
+      if (e.status !== 401) setError(e.message);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!apiKey) return;
-    getOrganizations(apiKey)
-      .then((list) => {
-        setOrgs(list);
-        setOrgId((cur) => (cur && list.some((o) => o.id.toLowerCase() === cur.toLowerCase()) ? cur : list[0]?.id ?? null));
-      })
-      .catch((e) => {
-        if (/invalid api key/i.test(e.message)) signOut();
-        else setError(e.message);
-      });
-  }, [apiKey]);
+    if (signedIn) loadSites();
+    else if (signedIn === false) setSites(null);
+  }, [signedIn, loadSites]);
 
   const reload = async () => {
-    if (!apiKey || !orgId) return;
+    if (!orgId) return;
     setError(null);
     try {
-      const [r, c] = await Promise.all([getRooms(apiKey, orgId), listCameras(apiKey, orgId)]);
+      const [r, c] = await Promise.all([getRooms(orgId).catch(() => [] as Room[]), listCameras(orgId)]);
       setRooms(r);
       setCameras(c);
     } catch (e: any) {
-      setError(e.message);
+      if (e.status !== 401) setError(e.message);
     }
   };
 
-  // Background refresh for the facility view: keeps status current without
-  // replacing the screen with an error if one poll fails.
+  // Background refresh: keeps status current without replacing the screen
+  // with an error if one poll fails.
   const refreshCameras = useCallback(async () => {
-    if (!apiKey || !orgId) return;
+    if (!orgId) return;
     try {
-      setCameras(await listCameras(apiKey, orgId));
+      setCameras(await listCameras(orgId));
     } catch {}
-  }, [apiKey, orgId]);
+  }, [orgId]);
 
   const refreshBilling = useCallback(async () => {
-    if (!apiKey || !orgId) return;
+    if (!orgId) return;
     try {
-      setBilling(await getBilling(apiKey, orgId));
+      setBilling(await getBilling(orgId));
     } catch {}
-  }, [apiKey, orgId]);
+  }, [orgId]);
 
   useEffect(() => {
     setBilling(null);
@@ -133,10 +154,10 @@ export default function App() {
     return () => window.removeEventListener(BILLING_REQUIRED_EVENT, onRequired);
   }, [refreshBilling]);
 
-  // Keep camera status (online/offline, last frame) current on every screen,
-  // not just the one that happened to load it: once a minute while visible.
+  // Keep camera status (online/offline, last frame) current on every screen:
+  // once a minute while visible.
   useEffect(() => {
-    if (!apiKey || !orgId) return;
+    if (!orgId) return;
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       refreshCameras();
@@ -149,43 +170,55 @@ export default function App() {
       window.clearInterval(t);
       document.removeEventListener("visibilitychange", tick);
     };
-  }, [apiKey, orgId, refreshCameras, refreshBilling]);
+  }, [orgId, refreshCameras, refreshBilling]);
 
   useEffect(() => {
     setRooms(null);
     setCameras(null);
-    reload();
+    if (orgId) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, orgId]);
+  }, [orgId]);
 
-  function signOut() {
-    saveApiKey(null);
-    setApiKey(null);
-    setOrgs(null);
+  async function signOut() {
+    await labs().auth.signOut();
+    setSites(null);
     setCameras(null);
     setRooms(null);
   }
 
-  if (apiKey === undefined) return null;
-  if (!apiKey) return <KeyGate onKey={(k) => { saveApiKey(k); setApiKey(k); }} />;
+  if (signedIn === undefined) return null;
+  if (!signedIn) return <SignInGate />;
   if (error)
     return (
       <Centered>
         <div className="error-text">{error}</div>
-        <button className="btn" style={{ marginTop: 16 }} onClick={reload}>Retry</button>
+        <button className="btn" style={{ marginTop: 16 }} onClick={() => { setError(null); loadSites(); reload(); }}>Retry</button>
       </Centered>
     );
-  if (!orgs || !rooms || !cameras || !orgId) return <Centered><span className="eyebrow">Loading…</span></Centered>;
-  if (orgs.length === 0) return <Centered><span className="muted">This API key isn&apos;t linked to any organization.</span></Centered>;
+  if (!sites) return <Centered><span className="eyebrow">Loading…</span></Centered>;
+  if (sites.length === 0 || connecting)
+    return (
+      <ConnectSite
+        email={email}
+        onCancel={sites.length ? () => setConnecting(false) : undefined}
+        onConnected={(id) => { setConnecting(false); setView("facility"); loadSites(id); }}
+        onSignOut={signOut}
+      />
+    );
+  if (!orgId || !rooms || !cameras) return <Centered><span className="eyebrow">Loading…</span></Centered>;
+
+  const site = sites.find((s) => s.orgId === orgId);
+  const owner = site?.role === "owner";
+  const billingTab = !!billing?.configured;
 
   const camera = cameras.find((c) => c.id === cameraId);
   if (camera) {
     return (
       <Player
         key={camera.id}
-        apiKey={apiKey}
         orgId={orgId}
         camera={camera}
+        canEdit={owner}
         roomName={rooms.find((r) => r.id.toLowerCase() === camera.roomId)?.name ?? "Unknown room"}
         onBack={() => { setCameraId(null); reload(); }}
         onCameraChange={(c) => setCameras((list) => list?.map((x) => (x.id === c.id ? c : x)) ?? list)}
@@ -193,50 +226,72 @@ export default function App() {
     );
   }
 
-  const org = orgs.find((o) => o.id.toLowerCase() === orgId.toLowerCase());
+  const tabs = VIEWS.filter((v) => v !== "billing" || billingTab);
   return (
     <div className={`page${view === "facility" ? " wide" : ""}`}>
       <header className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", marginBottom: 24, gap: 16 }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <Brand />
-          <h1 className="title" style={{ marginTop: 10 }}>{org?.name ?? "Facility"}</h1>
+          <h1 className="title" style={{ marginTop: 10 }}>{site?.name ?? "Facility"}</h1>
         </div>
-        {orgs.length > 1 && (
-          <select className="field" value={orgId} onChange={(e) => { setCameraId(null); setOrgId(e.target.value); }} style={{ width: "auto", minWidth: 200 }} aria-label="Organization">
-            {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
-        )}
-        <button className="btn accent" onClick={() => { setView("cameras"); setClaiming(true); }}>+ Add camera</button>
-        {!builder && <button className="btn ghost" onClick={signOut}>Sign out</button>}
+        <select
+          className="field"
+          value={orgId}
+          onChange={(e) => {
+            if (e.target.value === "__connect") return setConnecting(true);
+            setCameraId(null);
+            setOrgId(e.target.value);
+          }}
+          style={{ width: "auto", minWidth: 200 }}
+          aria-label="Site"
+        >
+          {sites.map((s) => <option key={s.orgId} value={s.orgId}>{s.name}{s.role === "viewer" ? " (view only)" : ""}</option>)}
+          <option value="__connect">+ Connect another organization…</option>
+        </select>
+        {owner && <button className="btn accent" onClick={() => { setView("cameras"); setClaiming(true); }}>+ Add camera</button>}
+        <button className="btn ghost" onClick={signOut} title={email ?? undefined}>Sign out</button>
       </header>
 
+      {site && site.keyStatus !== "ok" && (
+        <div className="billing-banner alarm" role="status">
+          <span style={{ flex: 1, minWidth: 220 }}>
+            {site.keyStatus === "rejected"
+              ? "Growlink rejected this site's API key, so sensor data and room names can't load."
+              : "This site has no Growlink API key, so sensor data and room names can't load."}
+            {owner ? " Reconnect it in Settings." : " Ask a site owner to reconnect it."}
+          </span>
+          {owner && <button className="btn" onClick={() => setView("settings")}>Settings</button>}
+        </div>
+      )}
+
       <div role="tablist" className="tabs" style={{ padding: 0, marginBottom: 24 }}>
-        {(["facility", "cameras", "billing"] as HomeView[]).map((v) => (
+        {tabs.map((v) => (
           <button key={v} role="tab" aria-selected={view === v} className="tab" onClick={() => setView(v)}>
-            {v === "facility" ? "Facility" : v === "cameras" ? `Cameras · ${cameras.length}` : "Billing"}
+            {v === "facility" ? "Facility" : v === "cameras" ? `Cameras · ${cameras.length}` : v === "settings" ? "Settings" : "Billing"}
           </button>
         ))}
       </div>
 
       {view !== "billing" && <BillingBanner billing={billing} onOpen={() => setView("billing")} />}
 
-      {view === "billing" || (billing && !billing.entitled) ? (
-        <BillingView apiKey={apiKey} orgId={orgId} billing={billing} onRefresh={refreshBilling} />
-      ) : view === "facility" ? (
+      {view === "settings" ? (
+        <SiteSettings orgId={orgId} onChanged={() => loadSites(orgId)} onLeft={() => { setOrgId(null); loadSites(); setView("facility"); }} />
+      ) : billingTab && (view === "billing" || (billing && !billing.entitled)) ? (
+        <BillingView orgId={orgId} billing={billing} onRefresh={refreshBilling} />
+      ) : view === "facility" || view === "billing" ? (
         <FacilityView
-          apiKey={apiKey}
           orgId={orgId}
           rooms={rooms}
           cameras={cameras}
           onOpen={(id) => setCameraId(id)}
-          onAddCamera={() => { setView("cameras"); setClaiming(true); }}
+          onAddCamera={owner ? () => { setView("cameras"); setClaiming(true); } : undefined}
         />
       ) : (
         <CameraHome
-          apiKey={apiKey}
           orgId={orgId}
           rooms={rooms}
           cameras={cameras}
+          canEdit={owner}
           claiming={claiming}
           onClaimingChange={setClaiming}
           onCamerasChange={setCameras}
@@ -273,52 +328,20 @@ function BillingBanner({ billing: b, onOpen }: { billing: Billing | null; onOpen
   );
 }
 
-function KeyGate({ onKey }: { onKey: (k: string) => void }) {
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const k = key.trim();
-    if (!k) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await getOrganizations(k);
-      onKey(k);
-    } catch (e: any) {
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
+function SignInGate() {
   return (
     <Centered>
-      <form onSubmit={submit} className="card" style={{ width: "min(440px, 100%)", textAlign: "left", padding: 28 }}>
+      <div className="card" style={{ width: "min(440px, 100%)", textAlign: "left", padding: 28 }}>
         <Brand />
         <h1 className="title" style={{ marginTop: 14 }}>Sign in</h1>
         <p className="muted" style={{ fontSize: 14, lineHeight: 1.5, margin: "8px 0 22px" }}>
-          Use your Growlink API key (portal → Builder → Authentication). It stays in this browser tab and is
-          forgotten when the tab closes.
+          Plant Health AI uses your Growlink LABS account — the same sign-in as every LABS app. New to LABS? You can
+          create an account on the next page.
         </p>
-        <label className="label">
-          <span>API key</span>
-          <input
-            className="field"
-            type="password"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="Paste your key"
-            autoFocus
-          />
-        </label>
-        {err && <div className="error-text" style={{ marginTop: 10 }}>{err}</div>}
-        <button type="submit" className="btn solid" disabled={busy || !key.trim()} style={{ marginTop: 18, width: "100%" }}>
-          {busy ? "Checking…" : "Continue"}
+        <button className="btn solid" style={{ width: "100%" }} onClick={goToLabsAccount}>
+          Sign in with Growlink LABS
         </button>
-      </form>
+      </div>
     </Centered>
   );
 }

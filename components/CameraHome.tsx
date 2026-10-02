@@ -3,12 +3,9 @@
 import { useEffect, useState } from "react";
 import {
   Camera,
-  MonitoringStatus,
   claimCamera,
-  getMonitoring,
   listFrames,
   revokeCamera,
-  setMonitoring,
   signFrames,
   updateCamera,
 } from "../lib/api";
@@ -18,19 +15,19 @@ import { ago, cameraStatus } from "../lib/status";
 // The Cameras tab: claim, rename, move and revoke cameras. The page header
 // (org, Add camera, Sign out) is shared with the Facility tab, in App.
 export default function CameraHome({
-  apiKey,
   orgId,
   rooms,
   cameras,
+  canEdit,
   claiming,
   onClaimingChange: setClaiming,
   onCamerasChange,
   onOpen,
 }: {
-  apiKey: string;
   orgId: string;
   rooms: Room[];
   cameras: Camera[];
+  canEdit: boolean; // owners claim and manage cameras; viewers see them
   claiming: boolean;
   onClaimingChange: (v: boolean) => void;
   onCamerasChange: (c: Camera[]) => void;
@@ -53,7 +50,7 @@ export default function CameraHome({
           rooms={rooms}
           onCancel={() => setClaiming(false)}
           onClaim={async (body) => {
-            const cam = await claimCamera(apiKey, orgId, body);
+            const cam = await claimCamera(orgId, body);
             onCamerasChange([...cameras, cam]);
             setClaiming(false);
           }}
@@ -66,11 +63,13 @@ export default function CameraHome({
           <p className="muted" style={{ maxWidth: 440, margin: "12px auto 20px", lineHeight: 1.5 }}>
             Plug a Growlink camera into a PoE port, then add it here with its Growlink setup code.
           </p>
-          <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
+          {canEdit ? (
+            <button className="btn accent" onClick={() => setClaiming(true)}>+ Add camera</button>
+          ) : (
+            <span className="small muted">A site owner can add cameras.</span>
+          )}
         </div>
       )}
-
-      {cameras.length > 0 && <BackgroundMonitoring apiKey={apiKey} orgId={orgId} />}
 
       {[...groups, ...(orphans.length ? [{ room: null as Room | null, cams: orphans }] : [])].map((g) => (
         <section key={g.room?.id ?? "orphans"}>
@@ -84,15 +83,15 @@ export default function CameraHome({
             {g.cams.map((c) => (
               <CameraCard
                 key={c.id}
-                apiKey={apiKey}
                 orgId={orgId}
                 camera={c}
+                canEdit={canEdit}
                 editing={editing === c.id}
                 rooms={rooms}
                 onOpen={() => onOpen(c.id)}
                 onEdit={() => setEditing(editing === c.id ? null : c.id)}
-                onSave={async (patch) => { replace(await updateCamera(apiKey, orgId, c.id, patch)); setEditing(null); }}
-                onRevoke={async () => { replace(await revokeCamera(apiKey, orgId, c.id)); setEditing(null); }}
+                onSave={async (patch) => { replace(await updateCamera(orgId, c.id, patch)); setEditing(null); }}
+                onRevoke={async () => { replace(await revokeCamera(orgId, c.id)); setEditing(null); }}
               />
             ))}
           </div>
@@ -103,28 +102,28 @@ export default function CameraHome({
 }
 
 // Latest frame as a thumbnail. One frames call and one signing call per card.
-function useLatestFrame(apiKey: string, orgId: string, c: Camera) {
+function useLatestFrame(orgId: string, c: Camera) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!c.lastFrameAt) return;
     let dead = false;
     const t = new Date(c.lastFrameAt).getTime();
-    listFrames(apiKey, orgId, c.id, t - 15 * 60_000, t + 60_000)
+    listFrames(orgId, c.id, t - 15 * 60_000, t + 60_000)
       .then((r) => {
         const last = r.frames[r.frames.length - 1];
-        return last ? signFrames(apiKey, orgId, c.id, [last.id]).then((u) => u[last.id]) : undefined;
+        return last ? signFrames(orgId, c.id, [last.id]).then((u) => u[last.id]) : undefined;
       })
       .then((u) => !dead && u && setUrl(u))
       .catch(() => {});
     return () => { dead = true; };
-  }, [apiKey, orgId, c.id, c.lastFrameAt]);
+  }, [orgId, c.id, c.lastFrameAt]);
   return url;
 }
 
 function CameraCard({
-  apiKey,
   orgId,
   camera: c,
+  canEdit,
   editing,
   rooms,
   onOpen,
@@ -132,9 +131,9 @@ function CameraCard({
   onSave,
   onRevoke,
 }: {
-  apiKey: string;
   orgId: string;
   camera: Camera;
+  canEdit: boolean;
   editing: boolean;
   rooms: Room[];
   onOpen: () => void;
@@ -143,7 +142,7 @@ function CameraCard({
   onRevoke: () => Promise<void>;
 }) {
   const st = cameraStatus(c);
-  const thumb = useLatestFrame(apiKey, orgId, c);
+  const thumb = useLatestFrame(orgId, c);
   const [name, setName] = useState(c.name);
   const [roomId, setRoomId] = useState(c.roomId);
   const [busy, setBusy] = useState(false);
@@ -182,10 +181,10 @@ function CameraCard({
 
       <div className="row" style={{ marginTop: 16 }}>
         <button className="btn accent" style={{ flex: 1 }} onClick={onOpen} disabled={!c.lastFrameAt}>View timelapse</button>
-        <button className="btn" onClick={onEdit} aria-expanded={editing}>Manage</button>
+        {canEdit && <button className="btn" onClick={onEdit} aria-expanded={editing}>Manage</button>}
       </div>
 
-      {editing && (
+      {canEdit && editing && (
         <div className="stack" style={{ borderTop: "1px solid var(--line)", marginTop: 16, paddingTop: 16, gap: 12 }}>
           <label className="label">
             <span>Name</span>
@@ -295,60 +294,3 @@ function ClaimCamera({
   );
 }
 
-// Org setting: Nova watching every room in the background. Needs the org's
-// Growlink key stored (encrypted) for read-only sensor data.
-function BackgroundMonitoring({ apiKey, orgId }: { apiKey: string; orgId: string }) {
-  const [m, setM] = useState<MonitoringStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    getMonitoring(apiKey, orgId).then(setM).catch(() => setM(null));
-  }, [apiKey, orgId]);
-  if (!m) return null;
-
-  const toggle = async () => {
-    if (m.enabled && !window.confirm("Turn off background monitoring? Nova stops watching your rooms between visits and the stored Growlink key is deleted. You can still ask Nova about any frame or time range."))
-      return;
-    setBusy(true);
-    setErr(null);
-    try {
-      setM(await setMonitoring(apiKey, orgId, !m.enabled));
-    } catch (e: any) {
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="card" style={{ marginBottom: 20 }}>
-      <div className="row" style={{ gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <div className="row" style={{ gap: 10 }}>
-            <span className="eyebrow" style={{ color: "var(--text)" }}>Nova background monitoring</span>
-            <span className={`status ${m.enabled ? "ok" : "idle"}`}>{m.enabled ? "On" : "Off"}</span>
-          </div>
-          <p className="small muted" style={{ margin: "8px 0 0", lineHeight: 1.5 }}>
-            {m.enabled ? (
-              <>
-                Every 5 minutes Nova checks each room&apos;s newest picture and sensors for lights out of schedule, sudden
-                changes and readings out of range, and reviews what it finds (up to {m.alertsPerDay} alerts per camera a
-                day), plus a review of each day.
-                {m.available && (m.hasKey
-                  ? <> Uses your Growlink key (…{m.keyHint}), stored encrypted, for read-only sensor data.</>
-                  : <> Sensor checks start the next time the app is opened with your Growlink key.</>)}
-                {m.lastError && <span style={{ color: "var(--warn)" }}> Last problem: {m.lastError}.</span>}
-              </>
-            ) : (
-              <>Nova only looks when you ask. No Growlink key is stored.</>
-            )}
-          </p>
-        </div>
-        <button className={`btn${m.enabled ? " ghost" : " accent"}`} disabled={busy} onClick={toggle}>
-          {m.enabled ? "Turn off" : "Turn on"}
-        </button>
-      </div>
-      {err && <div className="error-text" style={{ marginTop: 8 }}>{err}</div>}
-    </div>
-  );
-}

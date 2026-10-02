@@ -12,7 +12,8 @@ import {
   signFrames,
   updateCamera,
 } from "../lib/api";
-import { Sensor, Uom, getSensorChart, getSensors } from "../lib/growlink";
+import type { Sensor, Uom } from "../lib/growlink";
+import { getSensorChart, getSensors } from "../lib/api";
 import {
   SensorMeta,
   Series,
@@ -36,17 +37,17 @@ const DAY = 24 * 3600 * 1000;
 const PREFETCH = 20;
 
 export default function Player({
-  apiKey,
   orgId,
   camera,
   roomName,
+  canEdit,
   onBack,
   onCameraChange,
 }: {
-  apiKey: string;
   orgId: string;
   camera: Camera;
   roomName: string;
+  canEdit: boolean; // owners choose the camera's sensors; viewers see them
   onBack: () => void;
   onCameraChange: (c: Camera) => void;
 }) {
@@ -86,7 +87,7 @@ export default function Player({
     let dead = false;
     (async () => {
       try {
-        const r = await listFrames(apiKey, orgId, camera.id);
+        const r = await listFrames(orgId, camera.id);
         if (dead) return;
         if (r.first == null || r.last == null) return setBounds(null);
         setBounds({ first: r.first, last: r.last });
@@ -96,7 +97,7 @@ export default function Player({
       }
     })();
     return () => { dead = true; };
-  }, [apiKey, orgId, camera.id]);
+  }, [orgId, camera.id]);
 
   // 2. Frames for the selected range (debounced while the user drags dates).
   useEffect(() => {
@@ -108,7 +109,7 @@ export default function Player({
     let dead = false;
     const h = window.setTimeout(async () => {
       try {
-        const r = await listFrames(apiKey, orgId, camera.id, range[0], range[1]);
+        const r = await listFrames(orgId, camera.id, range[0], range[1]);
         if (dead) return;
         setFrames(r.frames);
         if (r.first != null && r.last != null) setBounds({ first: r.first, last: r.last });
@@ -120,7 +121,7 @@ export default function Player({
       }
     }, 250);
     return () => { dead = true; window.clearTimeout(h); };
-  }, [apiKey, orgId, camera.id, range]);
+  }, [orgId, camera.id, range]);
 
   // 2b. Live: check for new frames every minute. When the selected range ends
   // at the newest frame (the default), new frames are appended and, if you're
@@ -135,7 +136,7 @@ export default function Player({
       busy = true;
       try {
         const lastKnown = cur.bounds.last;
-        const r = await listFrames(apiKey, orgId, camera.id, lastKnown + 1, Date.now() + 60_000);
+        const r = await listFrames(orgId, camera.id, lastKnown + 1, Date.now() + 60_000);
         const fresh = r.frames.filter((f) => f.ts > lastKnown);
         if (!fresh.length) return;
         const newest = fresh[fresh.length - 1].ts;
@@ -162,7 +163,7 @@ export default function Player({
       window.clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [apiKey, orgId, camera.id]);
+  }, [orgId, camera.id]);
 
   // 3. Signed URLs for a window around the playhead.
   useEffect(() => {
@@ -173,24 +174,46 @@ export default function Player({
       .filter((id) => !urls[id] && !requested.current.has(id));
     if (need.length === 0) return;
     need.forEach((id) => requested.current.add(id));
-    signFrames(apiKey, orgId, camera.id, need)
+    signFrames(orgId, camera.id, need)
       .then((got) => setUrls((prev) => ({ ...prev, ...got })))
       .catch((e) => {
         need.forEach((id) => requested.current.delete(id));
         setError(e.message);
       });
-  }, [apiKey, orgId, camera.id, frames, index, urls]);
+  }, [orgId, camera.id, frames, index, urls]);
+
+  // 3b. Paused on a frame: swap in the full-size picture once it has loaded
+  //     (playback uses the small copies; one full frame is worth the bytes).
+  const [full, setFull] = useState<{ id: number; url: string } | null>(null);
+  const pausedId = !playing && frames?.length ? frames[index]?.id ?? null : null;
+  useEffect(() => {
+    if (pausedId == null || full?.id === pausedId) return;
+    let dead = false;
+    const t = window.setTimeout(() => {
+      signFrames(orgId, camera.id, [pausedId], "full")
+        .then((got) => {
+          const url = got[pausedId];
+          if (!url || dead) return;
+          const img = new Image();
+          img.onload = () => !dead && setFull({ id: pausedId, url });
+          img.src = url;
+        })
+        .catch(() => {});
+    }, 400); // not while scrubbing
+    return () => { dead = true; window.clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, camera.id, pausedId]);
 
   // 4. The camera room's sensors, from Growlink: names and metrics for the
   //    configured ones, and the choices offered in settings.
   useEffect(() => {
     let dead = false;
     setRoomSensors(null);
-    getSensors(apiKey, camera.roomId)
+    getSensors(orgId, camera.roomId)
       .then((list) => !dead && setRoomSensors(list))
       .catch((e) => !dead && setSensorError(e.message));
     return () => { dead = true; };
-  }, [apiKey, camera.roomId]);
+  }, [camera.roomId]);
 
   // Configured sensors (no guessing), then display rows: with averaging on,
   // same-type sensors become one room-average row.
@@ -220,7 +243,7 @@ export default function Player({
     const req = configured.filter((s) => ids.includes(s.id));
     if (!range || req.length === 0) return setRaw(null);
     let dead = false;
-    getSensorChart(apiKey, orgId, req.map((s) => s.id), range[0], range[1], uom)
+    getSensorChart(orgId, req.map((s) => s.id), range[0], range[1], uom)
       .then((chart) => {
         if (dead) return;
         const got = seriesFromChart(chart, req);
@@ -231,7 +254,7 @@ export default function Player({
       })
       .catch((e) => !dead && setSensorError(e.message));
     return () => { dead = true; };
-  }, [apiKey, orgId, range, visible, baseRows, configured, uom]);
+  }, [orgId, range, visible, baseRows, configured, uom]);
 
   const { series, bands } = useMemo(
     () => (raw ? rowSeries(raw, rows) : { series: null, bands: {} }),
@@ -245,7 +268,7 @@ export default function Player({
     patch: { sensors?: string[]; averageSameType?: boolean } | null,
     u: Uom | null
   ) => {
-    if (patch) onCameraChange(await updateCamera(apiKey, orgId, camera.id, patch));
+    if (patch) onCameraChange(await updateCamera(orgId, camera.id, patch));
     if (u) {
       setUom(u);
       saveUom(u);
@@ -264,7 +287,7 @@ export default function Player({
   const loadInsights = async () => {
     setInsightsLoading(true);
     try {
-      setInsights(await listInsights(apiKey, orgId, camera.id));
+      setInsights(await listInsights(orgId, camera.id));
     } catch {
       setInsights((prev) => prev ?? []);
     } finally {
@@ -274,7 +297,7 @@ export default function Player({
   useEffect(() => {
     loadInsights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, orgId, camera.id]);
+  }, [orgId, camera.id]);
 
   // Yesterday's daily review is made the first time anyone opens the camera
   // after that day ends (the server never holds a Growlink key to run it on
@@ -290,7 +313,7 @@ export default function Player({
     if (insights.some((i) => i.kind === "daily" && i.day === label)) return;
     dailyTried.current = true;
     setDailyBusy(start.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }));
-    requestDailyInsight(apiKey, orgId, camera.id, { label, start: start.getTime(), end: end.getTime() }, uom)
+    requestDailyInsight(orgId, camera.id, { label, start: start.getTime(), end: end.getTime() }, uom)
       .catch(() => {})
       .finally(() => {
         setDailyBusy(null);
@@ -301,20 +324,20 @@ export default function Player({
 
   const askNova = async (question: string) => {
     if (!current) return;
-    const i = await requestMomentInsight(apiKey, orgId, camera.id, current.ts, question || undefined, uom);
+    const i = await requestMomentInsight(orgId, camera.id, current.ts, question || undefined, uom);
     setInsights((prev) => [i, ...(prev ?? []).filter((x) => x.id !== i.id)]);
   };
 
   const analyzeRange = async (question: string) => {
     if (!range) return;
-    const i = await requestRangeInsight(apiKey, orgId, camera.id, range[0], range[1], question || undefined, uom);
+    const i = await requestRangeInsight(orgId, camera.id, range[0], range[1], question || undefined, uom);
     setInsights((prev) => [i, ...(prev ?? []).filter((x) => x.id !== i.id)]);
   };
 
   const latestConcern = insights?.find((i) => i.status === "ready")?.concern;
 
   const current = frames?.[index];
-  const currentUrl = current ? urls[current.id] : undefined;
+  const currentUrl = current ? (!playing && full?.id === current.id ? full.url : urls[current.id]) : undefined;
   const tNow = current ? current.ts : null;
   const label = current
     ? new Date(current.ts).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
@@ -375,6 +398,7 @@ export default function Player({
           selected={camera.sensors}
           averageSameType={camera.averageSameType}
           uom={uom}
+          canEditSensors={canEdit}
           onSave={saveSettings}
           onClose={() => setSettingsOpen(false)}
         />
@@ -391,7 +415,11 @@ export default function Player({
         <span className="callout-text">
           Choose which sensors from <b>{roomName}</b> to show alongside this camera.
         </span>
-        <button className="btn accent" onClick={() => setSettingsOpen(true)}>Choose sensors</button>
+        {canEdit ? (
+          <button className="btn accent" onClick={() => setSettingsOpen(true)}>Choose sensors</button>
+        ) : (
+          <span className="small muted">A site owner can choose them.</span>
+        )}
       </div>
     ) : missing.length > 0 && roomSensors ? (
       <div className="callout warn">
@@ -400,7 +428,7 @@ export default function Player({
           {missing.length === 1 ? "One configured sensor is" : `${missing.length} configured sensors are`} no
           longer in {roomName} in Growlink.
         </span>
-        <button className="btn" onClick={() => setSettingsOpen(true)}>Review</button>
+        {canEdit && <button className="btn" onClick={() => setSettingsOpen(true)}>Review</button>}
       </div>
     ) : null;
 

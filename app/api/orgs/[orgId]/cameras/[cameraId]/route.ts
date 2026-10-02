@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { syncQuantity } from "../../../../../../lib/server/billing";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireKey, requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import { db } from "../../../../../../lib/server/supabase";
 import {
   CAMERA_COLUMNS,
@@ -22,6 +22,8 @@ type Ctx = { params: { orgId: string; cameraId: string } };
 export async function PATCH(req: Request, { params }: Ctx) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
   const cam = await loadCamera(ctx, params.cameraId);
   if (cam instanceof NextResponse) return cam;
 
@@ -31,6 +33,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
     const name = parseName(body.name);
     if (!name) return NextResponse.json({ error: "Name is required (max 80 chars)" }, { status: 400 });
     patch.name = name;
+  }
+  if (body.roomId !== undefined || body.sensors !== undefined) {
+    const noKey = requireKey(ctx);
+    if (noKey) return noKey;
   }
   let roomId = cam.room_id;
   if (body.roomId !== undefined && String(body.roomId).toLowerCase() !== cam.room_id) {
@@ -71,6 +77,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
 export async function DELETE(req: Request, { params }: Ctx) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
   const cam = await loadCamera(ctx, params.cameraId);
   if (cam instanceof NextResponse) return cam;
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireKey, requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import { db } from "../../../../../../lib/server/supabase";
 import {
   CAMERA_COLUMNS,
@@ -22,8 +22,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
-  const unpaid = await requireEntitled(ctx);
-  if (unpaid) return unpaid;
+  const blocked = requireOwner(ctx) ?? requireKey(ctx) ?? (await requireEntitled(ctx));
+  if (blocked) return blocked;
 
   const body = await req.json().catch(() => ({}));
   const code = typeof body.code === "string" ? normalizeClaimCode(body.code) : null;

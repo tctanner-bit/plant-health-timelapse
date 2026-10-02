@@ -18,18 +18,20 @@ export async function GET(req: Request, { params }: { params: { orgId: string } 
 
   const { data: rows, error } = await db().rpc("latest_frames", { p_org: ctx.orgId });
   if (error) return NextResponse.json({ error: "Database error" }, { status: 500 });
-  const list = (rows ?? []) as { camera_id: string; frame_id: number; captured_at: string; storage_path: string }[];
+  const list = (rows ?? []) as { camera_id: string; frame_id: number; captured_at: string; storage_path: string; small_path: string | null }[];
+  // Tiles use the small copy once it exists (made within minutes of arrival).
+  const pathOf = (r: (typeof list)[number]) => r.small_path ?? r.storage_path;
   if (list.length === 0) return NextResponse.json({ frames: {} });
 
   const { data: signed, error: signErr } = await db()
     .storage.from(FRAMES_BUCKET)
-    .createSignedUrls(list.map((r) => r.storage_path), TTL_SEC);
+    .createSignedUrls(list.map(pathOf), TTL_SEC);
   if (signErr) return NextResponse.json({ error: "Could not sign URLs" }, { status: 500 });
 
   const byPath = new Map(signed.map((s) => [s.path, s.signedUrl]));
   const frames: Record<string, { id: number; ts: number; url: string }> = {};
   for (const r of list) {
-    const url = byPath.get(r.storage_path);
+    const url = byPath.get(pathOf(r));
     if (url) frames[r.camera_id] = { id: r.frame_id, ts: new Date(r.captured_at).getTime(), url };
   }
   return NextResponse.json({ frames });

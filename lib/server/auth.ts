@@ -1,48 +1,70 @@
-// Tenancy check for API routes.
+// Who is calling, and may they use this site?
 //
-// The caller sends their Growlink API key in `X-Growlink-Key`. We ask Growlink
-// which organizations that key can see and allow the request only if the org
-// in the URL is one of them. Growlink stays the source of truth for who
-// belongs to which customer; we never store keys.
-//
-// Results are cached briefly per key hash so a playing timelapse doesn't call
-// Growlink on every signed-URL batch.
+// The browser sends the LABS access token (Authorization: Bearer). We check
+// it with the LABS project, then require a membership of the site connected
+// to the Growlink org in the URL. The site's Growlink key comes from Vault
+// for the server's own Growlink calls; it is never sent to the browser.
 
-import { createHash } from "crypto";
 import { NextResponse } from "next/server";
-import { getOrganizations, GrowlinkError, sameId } from "../growlink";
+import { LabsUser, Role, SiteRow, acceptInvites, labsUser, membership, rememberTz, siteKey } from "./sites";
 
-const TTL_MS = 5 * 60 * 1000;
-const cache = new Map<string, { orgs: { id: string; name: string }[]; exp: number }>();
-
-export type OrgContext = { apiKey: string; orgId: string; orgName: string | null };
-
-export async function requireOrg(
-  req: Request,
-  orgId: string
-): Promise<OrgContext | NextResponse> {
-  const apiKey = req.headers.get("x-growlink-key")?.trim();
-  if (!apiKey) return NextResponse.json({ error: "Missing Growlink API key" }, { status: 401 });
-  if (!/^[0-9a-f-]{36}$/i.test(orgId))
-    return NextResponse.json({ error: "Bad organization id" }, { status: 400 });
-
-  const h = createHash("sha256").update(apiKey).digest("hex");
-  let entry = cache.get(h);
-  if (!entry || entry.exp < Date.now()) {
-    try {
-      const orgs = await getOrganizations(apiKey);
-      entry = { orgs: orgs.map((o) => ({ id: o.id.toLowerCase(), name: o.name })), exp: Date.now() + TTL_MS };
-      cache.set(h, entry);
-    } catch (e) {
-      if (e instanceof GrowlinkError && e.status === 401)
-        return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
-      return NextResponse.json({ error: "Could not verify key with Growlink" }, { status: 502 });
-    }
-  }
-  const org = entry.orgs.find((o) => sameId(o.id, orgId));
-  if (!org) return NextResponse.json({ error: "Not a member of this organization" }, { status: 403 });
-
-  return { apiKey, orgId: orgId.toLowerCase(), orgName: org.name ?? null };
-}
+export type OrgContext = {
+  apiKey: string; // the site's Growlink key ("" when it needs reconnecting)
+  orgId: string;
+  orgName: string | null;
+  role: Role;
+  site: SiteRow;
+  user: LabsUser;
+};
 
 export const isResponse = (x: unknown): x is NextResponse => x instanceof NextResponse;
+
+/** The signed-in LABS user, or a 401. */
+export async function requireUser(req: Request): Promise<LabsUser | NextResponse> {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (!token) return NextResponse.json({ error: "Sign in to Growlink LABS", signIn: true }, { status: 401 });
+  const user = await labsUser(token).catch(() => null);
+  if (!user) return NextResponse.json({ error: "Your LABS session has expired — sign in again", signIn: true }, { status: 401 });
+  return user;
+}
+
+export async function requireOrg(req: Request, orgId: string): Promise<OrgContext | NextResponse> {
+  if (!/^[0-9a-f-]{36}$/i.test(orgId)) return NextResponse.json({ error: "Bad organization id" }, { status: 400 });
+  const user = await requireUser(req);
+  if (isResponse(user)) return user;
+
+  const id = orgId.toLowerCase();
+  let m = await membership(user.id, id);
+  if (!m) {
+    await acceptInvites(user); // invited since the last check?
+    m = await membership(user.id, id);
+  }
+  if (!m) return NextResponse.json({ error: "You don't have access to this site" }, { status: 403 });
+
+  await rememberTz(m.site, req.headers.get("x-client-tz")).catch(() => undefined);
+  const apiKey = (await siteKey(m.site.id)) ?? "";
+  return { apiKey, orgId: id, orgName: m.site.name, role: m.role, site: m.site, user };
+}
+
+/** For changes: claiming, renaming, revoking cameras, site settings. */
+export function requireOwner(ctx: OrgContext): NextResponse | null {
+  return ctx.role === "owner"
+    ? null
+    : NextResponse.json({ error: "Only a site owner can change this" }, { status: 403 });
+}
+
+/** Routes that need Growlink data: a clear message when the key is gone. */
+export function requireKey(ctx: OrgContext): NextResponse | null {
+  if (ctx.apiKey) return null;
+  return NextResponse.json(
+    {
+      error:
+        ctx.site.key_status === "rejected"
+          ? "Growlink rejected this site's API key. An owner needs to reconnect it in Settings."
+          : "This site has no Growlink API key. An owner needs to connect one in Settings.",
+      reconnect: true,
+    },
+    { status: 409 }
+  );
+}

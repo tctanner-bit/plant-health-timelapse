@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import { db } from "../../../../../../lib/server/supabase";
 import {
   APP,
@@ -10,6 +10,8 @@ import {
   hasLiveSubscription,
   stripe,
 } from "../../../../../../lib/server/billing";
+
+import { APP_URL } from "../../../../../../lib/labs";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,8 @@ const MIN_TRIAL_MS = 49 * 3600_000;
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
 
   try {
     const b = await getBilling(ctx.orgId, ctx.orgName);
@@ -50,7 +54,6 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
     const price = await cameraPrice();
     const quantity = Math.max(1, await activeCameraCount(ctx.orgId));
     const trialEnd = Date.parse(b.trial_ends_at);
-    const origin = new URL(req.url).origin;
     const meta = { org_id: ctx.orgId, org_name: ctx.orgName ?? "", app: APP };
 
     const session = await s.checkout.sessions.create({
@@ -69,8 +72,8 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
         ...(trialEnd - Date.now() > MIN_TRIAL_MS ? { trial_end: Math.floor(trialEnd / 1000) } : {}),
       },
       metadata: meta,
-      success_url: `${origin}/billing/done?status=success`,
-      cancel_url: `${origin}/billing/done?status=cancelled`,
+      success_url: `${APP_URL}billing/done/?status=success`,
+      cancel_url: `${APP_URL}billing/done/?status=cancelled`,
     });
     return NextResponse.json({ url: session.url });
   } catch (e) {

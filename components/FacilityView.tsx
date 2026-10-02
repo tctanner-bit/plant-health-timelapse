@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, LatestFrame, LatestInsight, latestFrames, latestInsights } from "../lib/api";
-import { LiveReading, Room, Sensor, getLiveSensors, getSensors } from "../lib/growlink";
+import { Camera, LatestFrame, LatestInsight, getLiveSensors, getSensors, latestFrames, latestInsights } from "../lib/api";
+import type { LiveReading, Room, Sensor } from "../lib/growlink";
 import { SensorMeta, configuredSensors, displayRows, fmt } from "../lib/sensors";
 import { loadUom } from "../lib/prefs";
 import { ago, cameraStatus } from "../lib/status";
@@ -31,19 +31,17 @@ const shortUnit = (u: string) => (u.includes("mol/m²/s") ? "µmol" : u);
 type Sort = "room" | "attention";
 
 export default function FacilityView({
-  apiKey,
   orgId,
   rooms,
   cameras,
   onOpen,
   onAddCamera,
 }: {
-  apiKey: string;
   orgId: string;
   rooms: Room[];
   cameras: Camera[];
   onOpen: (cameraId: string) => void;
-  onAddCamera: () => void;
+  onAddCamera?: () => void; // owners only
 }) {
   const [latest, setLatest] = useState<Record<string, LatestFrame>>({});
   const [roomSensors, setRoomSensors] = useState<Record<string, Sensor[]>>({});
@@ -76,7 +74,7 @@ export default function FacilityView({
     (async () => {
       for (let i = 0; i < todo.length; i += 6) {
         const batch = todo.slice(i, i + 6);
-        const got = await Promise.all(batch.map((r) => getSensors(apiKey, r).then((s) => [r, s] as const).catch(() => null)));
+        const got = await Promise.all(batch.map((r) => getSensors(orgId, r).then((s) => [r, s] as const).catch(() => null)));
         if (dead) return;
         setRoomSensors((prev) => {
           const next = { ...prev };
@@ -87,7 +85,7 @@ export default function FacilityView({
     })();
     return () => { dead = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, neededRooms.join()]);
+  }, [neededRooms.join()]);
 
   // Latest frames and Nova flags every minute (camera status refreshes app-wide).
   // Snapshot URLs are signed for an hour, so an unchanged frame gets a fresh
@@ -97,7 +95,7 @@ export default function FacilityView({
     if (framesBusy.current) return;
     framesBusy.current = true;
     try {
-      const got = await latestFrames(apiKey, orgId);
+      const got = await latestFrames(orgId);
       const now = Date.now();
       setLatest((prev) => {
         const next: Record<string, LatestFrame> = {};
@@ -113,8 +111,8 @@ export default function FacilityView({
     } finally {
       framesBusy.current = false;
     }
-    latestInsights(apiKey, orgId).then(setNova).catch(() => {});
-  }, [apiKey, orgId]);
+    latestInsights(orgId).then(setNova).catch(() => {});
+  }, [orgId]);
 
   // The camera list (refreshed app-wide) knows when a camera last sent a
   // frame; if that's newer than the snapshot on screen, fetch it now.
@@ -134,7 +132,7 @@ export default function FacilityView({
   const pollLive = useCallback(async () => {
     if (sensorIds.length === 0) return;
     try {
-      const readings = await getLiveSensors(apiKey, orgId, sensorIds, uom);
+      const readings = await getLiveSensors(orgId, sensorIds, uom);
       const map: Record<string, LiveReading> = {};
       for (const r of readings) map[r.sensorId.toLowerCase()] = r;
       setLive(map);
@@ -143,7 +141,7 @@ export default function FacilityView({
     } catch (e: any) {
       setLiveError(e.message); // keep showing the last good readings
     }
-  }, [apiKey, orgId, sensorIds, uom]);
+  }, [orgId, sensorIds, uom]);
 
   useEffect(() => {
     const visible = () => document.visibilityState === "visible";
@@ -187,7 +185,7 @@ export default function FacilityView({
         <p className="muted" style={{ maxWidth: 440, margin: "12px auto 20px", lineHeight: 1.5 }}>
           Add a camera to a room and its latest snapshot and sensor readings will appear here.
         </p>
-        <button className="btn accent" onClick={onAddCamera}>+ Add camera</button>
+        {onAddCamera && <button className="btn accent" onClick={onAddCamera}>+ Add camera</button>}
       </div>
     );
   }

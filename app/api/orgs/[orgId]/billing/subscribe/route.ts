@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import {
   APP,
   BillingError,
@@ -23,6 +23,8 @@ const MIN_TRIAL_MS = 49 * 3600_000;
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
 
   try {
     const b = await getBilling(ctx.orgId, ctx.orgName);

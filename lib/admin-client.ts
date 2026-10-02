@@ -5,6 +5,7 @@
 // and the fleet_admins allow-list on every request.
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { appPath } from "./labs";
 
 let client: SupabaseClient | null = null;
 
@@ -32,7 +33,7 @@ export async function adminFetch<T>(path: string, init: { method?: string; body?
   const { data } = await adminAuth().auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new AdminError("Sign in required", 401);
-  const res = await fetch(path, {
+  const res = await fetch(appPath(path), {
     method: init.method ?? "GET",
     headers: {
       Authorization: `Bearer ${token}`,

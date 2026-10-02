@@ -37,6 +37,7 @@ export default function DisplaySettings({
   averageSameType,
   uom,
   initialTab = "sensors",
+  canEditSensors = true,
   onSave,
   onClose,
 }: {
@@ -47,11 +48,12 @@ export default function DisplaySettings({
   averageSameType: boolean;
   uom: Uom;
   initialTab?: "sensors" | "units";
+  canEditSensors?: boolean; // viewers only change their own units
   onSave: (patch: Patch | null, uom: Uom | null) => Promise<void>;
   onClose: () => void;
 }) {
   const initial = useMemo(() => selected.map((s) => s.toLowerCase()), [selected]);
-  const [tab, setTab] = useState(initialTab);
+  const [tab, setTab] = useState(canEditSensors ? initialTab : "units");
   const [picked, setPicked] = useState<string[]>(initial);
   const [average, setAverage] = useState(averageSameType);
   const [units, setUnits] = useState<Uom>(uom);
@@ -157,7 +159,7 @@ export default function DisplaySettings({
         </div>
 
         <div role="tablist" className="tabs">
-          {(["sensors", "units"] as const).map((t) => (
+          {(canEditSensors ? (["sensors", "units"] as const) : (["units"] as const)).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className="tab">
               {t === "sensors" ? `Sensors · ${picked.length}` : "Units"}
               {(t === "sensors" ? sensorsDirty : unitsDirty) && <span aria-label="changed" className="dirty" />}

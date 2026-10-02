@@ -3,7 +3,6 @@ import { requireOrg, isResponse } from "../../../../../lib/server/auth";
 import { db } from "../../../../../lib/server/supabase";
 import { CAMERA_COLUMNS, CameraRow, toCamera } from "../../../../../lib/server/cameras";
 import { getRooms, sameId } from "../../../../../lib/growlink";
-import { rememberKey } from "../../../../../lib/server/monitoring";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +11,6 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
-  // Keep the key for background Nova (unless the org turned it off).
-  await rememberKey(ctx.orgId, ctx.apiKey, req.headers.get("x-client-tz"));
 
   const { data, error } = await db()
     .from("cameras")
@@ -24,9 +21,9 @@ export async function GET(req: Request, { params }: { params: { orgId: string } 
   const rows = data as (CameraRow & { org_name: string | null; room_name: string | null })[];
 
   // Keep the names support sees in the fleet dashboard current. Growlink is
-  // the source of truth; this request already holds a key that can read them.
+  // the source of truth, read with the site's key.
   const stale = rows.filter((r) => r.org_name !== ctx.orgName || !r.room_name);
-  if (stale.length) {
+  if (stale.length && ctx.apiKey) {
     const rooms = await getRooms(ctx.apiKey, ctx.orgId).catch(() => []);
     await Promise.all(
       stale.map((r) =>

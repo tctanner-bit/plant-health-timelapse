@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import { BillingError, getBilling, hasLiveSubscription, isOurs, saveSubscription, stripe } from "../../../../../../lib/server/billing";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
   const body = await req.json().catch(() => ({}));
   try {
     const b = await getBilling(ctx.orgId, ctx.orgName);

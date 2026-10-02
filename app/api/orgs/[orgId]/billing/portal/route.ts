@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireOrg, isResponse } from "../../../../../../lib/server/auth";
+import { requireOrg, requireOwner, isResponse } from "../../../../../../lib/server/auth";
 import { BillingError, getBilling, stripe } from "../../../../../../lib/server/billing";
+
+import { APP_URL } from "../../../../../../lib/labs";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,8 @@ async function portalConfiguration(): Promise<string | null> {
 export async function POST(req: Request, { params }: { params: { orgId: string } }) {
   const ctx = await requireOrg(req, params.orgId);
   if (isResponse(ctx)) return ctx;
+  const notOwner = requireOwner(ctx);
+  if (notOwner) return notOwner;
   try {
     const b = await getBilling(ctx.orgId, ctx.orgName);
     if (!b.stripe_customer_id)
@@ -27,7 +31,7 @@ export async function POST(req: Request, { params }: { params: { orgId: string }
     const session = await stripe().billingPortal.sessions.create({
       customer: b.stripe_customer_id,
       ...(configuration ? { configuration } : {}),
-      return_url: `${new URL(req.url).origin}/billing/done?status=portal`,
+      return_url: `${APP_URL}billing/done/?status=portal`,
     });
     return NextResponse.json({ url: session.url });
   } catch (e) {

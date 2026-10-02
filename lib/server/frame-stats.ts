@@ -54,3 +54,11 @@ export function visualDifference(a: Uint8Array, b: Uint8Array): number {
   for (let i = 0; i < a.length; i++) d += Math.abs(a[i] / ma - b[i] / mb);
   return d / a.length;
 }
+
+// The small copy used for tiles and timelapse playback: ~640 px wide,
+// roughly a fifth of the original's bytes. Full size stays for a paused frame
+// and for Nova.
+export const SMALL_WIDTH = 640;
+export async function smallCopy(jpeg: Buffer): Promise<Buffer> {
+  return sharp(jpeg).resize({ width: SMALL_WIDTH, withoutEnlargement: true }).jpeg({ quality: 72, mozjpeg: true }).toBuffer();
+}

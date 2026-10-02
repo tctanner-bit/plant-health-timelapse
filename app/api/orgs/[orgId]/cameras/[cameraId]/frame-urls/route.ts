@@ -25,10 +25,12 @@ export async function POST(req: Request, { params }: { params: { orgId: string; 
     ? body.ids.filter((n: unknown) => Number.isInteger(n)).slice(0, MAX_IDS)
     : [];
   if (ids.length === 0) return NextResponse.json({ urls: {} });
+  // Small (~640 px) copies for tiles and playback; full size when asked.
+  const full = body.size === "full";
 
   const { data: rows, error } = await db()
     .from("camera_frames")
-    .select("id, storage_path")
+    .select("id, storage_path, small_path")
     .eq("camera_id", cam.id)
     .eq("org_id", ctx.orgId)
     .in("id", ids);
@@ -37,13 +39,16 @@ export async function POST(req: Request, { params }: { params: { orgId: string; 
 
   const { data: signed, error: signErr } = await db()
     .storage.from(FRAMES_BUCKET)
-    .createSignedUrls(rows.map((r) => r.storage_path), TTL_SEC);
+    .createSignedUrls(rows.map((r) => pathFor(r)), TTL_SEC);
   if (signErr) return NextResponse.json({ error: "Could not sign URLs" }, { status: 500 });
 
+  function pathFor(r: { storage_path: string; small_path: string | null }) {
+    return full ? r.storage_path : r.small_path ?? r.storage_path;
+  }
   const byPath = new Map(signed.map((s) => [s.path, s.signedUrl]));
   const urls: Record<number, string> = {};
   for (const r of rows) {
-    const u = byPath.get(r.storage_path);
+    const u = byPath.get(pathFor(r));
     if (u) urls[r.id] = u;
   }
   return NextResponse.json({ urls });

@@ -20,12 +20,10 @@ const STATE_LABEL: Record<Billing["state"], [string, "ok" | "warn" | "alarm" | "
 };
 
 export default function BillingView({
-  apiKey,
   orgId,
   billing,
   onRefresh,
 }: {
-  apiKey: string;
   orgId: string;
   billing: Billing | null;
   onRefresh: () => void;
@@ -63,8 +61,8 @@ export default function BillingView({
       setBusy(false);
     }
   };
-  const checkout = () => go(() => startCheckout(apiKey, orgId));
-  const portal = () => go(() => openBillingPortal(apiKey, orgId));
+  const checkout = () => go(() => startCheckout(orgId));
+  const portal = () => go(() => openBillingPortal(orgId));
   // Actions that finish here, without Stripe's pages.
   const inPlace = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -83,13 +81,13 @@ export default function BillingView({
   const subscribeOnFile = () => {
     const when = b.state === "trial" && b.daysLeft ? `on ${date(b.trialEndsAt)}` : "today";
     if (window.confirm(`Subscribe to Plant Health AI for ${qty} camera${qty === 1 ? "" : "s"} (${monthly ?? unit + " each"}/month) using ${cardLabel}? First charge ${when}.`))
-      inPlace(() => subscribeWithCardOnFile(apiKey, orgId));
+      inPlace(() => subscribeWithCardOnFile(orgId));
   };
   const cancel = () => {
     if (window.confirm("Cancel Plant Health AI at the end of this billing period? Your cameras keep recording; viewing and Nova stop when it ends."))
-      inPlace(() => setCancelAtPeriodEnd(apiKey, orgId, true));
+      inPlace(() => setCancelAtPeriodEnd(orgId, true));
   };
-  const resume = () => inPlace(() => setCancelAtPeriodEnd(apiKey, orgId, false));
+  const resume = () => inPlace(() => setCancelAtPeriodEnd(orgId, false));
 
   return (
     <div className="stack" style={{ gap: 18, maxWidth: 720 }}>

@@ -35,8 +35,8 @@ const arg = (n) => {
   const i = args.indexOf(`--${n}`);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const webhookUrl = arg("webhook-url") ?? "https://timelapse-web-six.vercel.app/api/stripe/webhook";
-const appUrl = new URL(webhookUrl).origin;
+const webhookUrl = arg("webhook-url") ?? "https://timelapse-web-six.vercel.app/plant-health/api/stripe/webhook/";
+const appUrl = "https://labs.growlink.io/plant-health"; // where customers use the app
 
 const key = process.env.STRIPE_SECRET_KEY;
 if (!key) {
@@ -84,7 +84,7 @@ const configs = await stripe.billingPortal.configurations.list({ active: true, l
 let portal = configs.data.find((c) => c.metadata?.app === APP);
 const portalSettings = {
   business_profile: { headline: "Plant Health AI — manage your subscription" },
-  default_return_url: `${appUrl}/billing/done?status=portal`,
+  default_return_url: `${appUrl}/billing/done/?status=portal`,
   // Customers are often Growlink's existing billing records, with Growlink
   // subscriptions on them. The portal shows every subscription a customer
   // has, so it may only update the card and show invoices: cancelling Plant
