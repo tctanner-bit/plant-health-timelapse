@@ -4,7 +4,7 @@
 import { createClient, SupabaseClient, User } from "@supabase/supabase-js";
 import { createHash } from "crypto";
 import { db } from "./supabase";
-import { LABS_PUBLISHABLE_KEY, LABS_SUPABASE_URL } from "../labs";
+import { LABS_APP_SLUG, LABS_PUBLISHABLE_KEY, LABS_SUPABASE_URL } from "../labs";
 
 export type Role = "owner" | "viewer";
 
@@ -38,20 +38,52 @@ function labsAuth(): SupabaseClient {
   return labs;
 }
 
-export type LabsUser = { id: string; email: string | null; emailVerified: boolean };
+/** LABS access for the account: approved / waiting / declined, and which apps
+    (null = every app). "unknown" when LABS couldn't be asked. */
+export type LabsAccessStatus = "approved" | "pending" | "declined" | "unknown";
+export type LabsUser = {
+  id: string;
+  email: string | null;
+  emailVerified: boolean;
+  access: LabsAccessStatus;
+  canUse: boolean; // approved, and allowed to use this app
+};
 
 const userCache = new Map<string, { user: LabsUser | null; exp: number }>();
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** The LABS account behind an access token, or null. Cached 60 s per token. */
+/* Asked with the person's own token (labs_my_access reads auth.uid()), so no
+   LABS secret is needed here. Fails closed: if LABS can't answer, no access. */
+async function labsAccess(token: string): Promise<{ status: LabsAccessStatus; canUse: boolean }> {
+  const c = createClient(LABS_SUPABASE_URL, LABS_PUBLISHABLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: {
+      headers: { Authorization: `Bearer ${token}` },
+      fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
+    },
+  });
+  const { data, error } = await c.rpc("labs_my_access");
+  if (error || !data) return { status: "unknown", canUse: false };
+  const a = data as { status?: string; apps?: string[] | null; admin?: boolean };
+  const status = (["approved", "pending", "declined"].includes(a.status ?? "") ? a.status : "unknown") as LabsAccessStatus;
+  const canUse = status === "approved" && (a.apps == null || (Array.isArray(a.apps) && a.apps.includes(LABS_APP_SLUG)));
+  return { status, canUse };
+}
+
+/** The LABS account behind an access token, with its LABS access, or null.
+    Cached 60 s per token (10 s when LABS couldn't be asked). */
 export async function labsUser(token: string): Promise<LabsUser | null> {
   const h = sha(token);
   const hit = userCache.get(h);
   if (hit && hit.exp > Date.now()) return hit.user;
   const { data, error } = await labsAuth().auth.getUser(token);
   const u: User | null = error ? null : data.user;
-  const user = u ? { id: u.id, email: u.email?.toLowerCase() ?? null, emailVerified: !!u.email_confirmed_at } : null;
-  userCache.set(h, { user, exp: Date.now() + 60_000 });
+  let user: LabsUser | null = null;
+  if (u) {
+    const acc = await labsAccess(token);
+    user = { id: u.id, email: u.email?.toLowerCase() ?? null, emailVerified: !!u.email_confirmed_at, access: acc.status, canUse: acc.canUse };
+  }
+  userCache.set(h, { user, exp: Date.now() + (user?.access === "unknown" ? 10_000 : 60_000) });
   if (userCache.size > 5000) userCache.clear();
   return user;
 }

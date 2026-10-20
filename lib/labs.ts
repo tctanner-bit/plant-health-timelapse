@@ -15,6 +15,11 @@ export const LABS_PUBLISHABLE_KEY =
   process.env.NEXT_PUBLIC_LABS_PUBLISHABLE_KEY ?? "sb_publishable_bM41aNdv5IJvmhWGmBcDiQ_eiY6QG8-";
 export const LABS_STORAGE_KEY = "growlink.labs.auth";
 
+/* This app's slug in LABS (apps.json). LABS accounts must be approved, and can
+   be limited to some apps (labs.growlink.io /admin/ → Access); the server
+   checks both through labs_my_access() before serving anything. */
+export const LABS_APP_SLUG = "plant-health";
+
 /** An app path with the base path and the trailing slash both sites use. */
 export function appPath(path: string): string {
   const [p, q] = path.split("?");

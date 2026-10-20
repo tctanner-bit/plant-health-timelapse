@@ -26,6 +26,16 @@ export async function requireUser(req: Request): Promise<LabsUser | NextResponse
   if (!token) return NextResponse.json({ error: "Sign in to Growlink LABS", signIn: true }, { status: 401 });
   const user = await labsUser(token).catch(() => null);
   if (!user) return NextResponse.json({ error: "Your LABS session has expired — sign in again", signIn: true }, { status: 401 });
+  // LABS is for approved accounts, and an account can be limited to some apps.
+  // Checked before memberships or invites are touched.
+  if (!user.canUse) {
+    const error =
+      user.access === "pending" ? "Your Growlink LABS account is waiting for approval by the LABS team."
+      : user.access === "declined" ? "Your Growlink LABS account isn't approved for LABS."
+      : user.access === "approved" ? "Your Growlink LABS account doesn't have access to Plant Health AI. Ask the LABS team."
+      : "Couldn't check your Growlink LABS access. Try again in a moment.";
+    return NextResponse.json({ error, labsAccess: user.access }, { status: user.access === "unknown" ? 503 : 403 });
+  }
   return user;
 }
 

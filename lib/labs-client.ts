@@ -6,7 +6,7 @@
 // of LABS.
 
 import { createClient, Session, SupabaseClient } from "@supabase/supabase-js";
-import { BASE_PATH, LABS_PUBLISHABLE_KEY, LABS_STORAGE_KEY, LABS_SUPABASE_URL } from "./labs";
+import { BASE_PATH, LABS_APP_SLUG, LABS_PUBLISHABLE_KEY, LABS_STORAGE_KEY, LABS_SUPABASE_URL } from "./labs";
 
 let client: SupabaseClient | null = null;
 export function labs(): SupabaseClient {
@@ -47,6 +47,20 @@ export function goToLabsAccount() {
     }
   } catch {}
   window.location.href = url;
+}
+
+/** The server refused this LABS account (see lib/server/auth.ts). Same as the
+    LABS pages' gate (labs-auth.js): waiting or declined → the LABS account page,
+    which says so; approved but not for this app → LABS home with a note. */
+export function leaveForLabsAccess(status: string) {
+  const url = status === "approved" ? `/?noaccess=${encodeURIComponent(LABS_APP_SLUG)}` : `/account/?next=${encodeURIComponent(returnPath())}`;
+  try {
+    if (window.top && window.top !== window && window.top.location.origin === window.location.origin) {
+      window.top.location.replace(url);
+      return;
+    }
+  } catch {}
+  window.location.replace(url);
 }
 
 /** On a host that isn't LABS (the bare Vercel URL), the LABS session isn't here. */

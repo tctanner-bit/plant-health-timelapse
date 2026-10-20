@@ -3,7 +3,7 @@
 // touching data. Growlink data comes through the server too (the site's key
 // never reaches the browser).
 
-import { accessToken } from "./labs-client";
+import { accessToken, leaveForLabsAccess } from "./labs-client";
 import { appPath } from "./labs";
 import type { Room, Sensor, ChartResponse, LiveReading, Uom } from "./growlink";
 
@@ -70,6 +70,8 @@ async function call<T>(path: string, init: { method?: string; body?: unknown } =
   if (!res.ok) {
     if (res.status === 402 && typeof window !== "undefined") window.dispatchEvent(new Event(BILLING_REQUIRED_EVENT));
     if (res.status === 401 && data.signIn && typeof window !== "undefined") window.dispatchEvent(new Event(SIGN_IN_REQUIRED_EVENT));
+    // not approved for LABS, or not for this app (the server enforces it; this only moves the page)
+    if (res.status === 403 && data.labsAccess && typeof window !== "undefined") leaveForLabsAccess(String(data.labsAccess));
     throw new ApiError(data.error ?? `HTTP ${res.status}`, res.status);
   }
   return data as T;
