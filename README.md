@@ -156,6 +156,7 @@ key:
 | display-fleet Supabase → Edge Function secrets | `AI_SERVICE_KEYS` = the key (comma-separate several) |
 | Vercel (server only) | `NOVA_SERVICE_KEY` = the same key |
 | Vercel (optional) | `NOVA_PROXY_URL` to point at a different proxy |
+| Vercel (server only, sensitive) | `JOBS_SECRET` = the Vault secret `phai_jobs_secret` (Plant Health Camera project); the scheduler sends it to `/api/jobs/*` |
 
 Without the key, Nova shows "Nova isn't configured on this server yet" and
 nothing else breaks.
@@ -209,8 +210,11 @@ reviews plus the daily review, both run server-side.
 
 - **Scheduler**: pg_cron in the Plant Health Camera database calls
   `POST /plant-health/api/jobs/watch/` every 5 minutes and `…/jobs/nova/` every
-  minute (via pg_net). Both are safe to call: a lock allows one watch run at
-  a time, and they return only counts.
+  minute (via pg_net), sending the shared secret `x-jobs-secret` (Vault
+  `phai_jobs_secret` = Vercel `JOBS_SECRET`); the routes refuse anything else
+  (401, or 503 if `JOBS_SECRET` is missing). A lock allows one watch run at a
+  time, and they return only counts. To rotate: update the Vault secret and the
+  Vercel env var together, then redeploy.
 - **Watchers** (no AI, `lib/server/watch.ts`): for each camera's newest
   frame, brightness / infrared / a 32×18 thumbnail (`camera_frame_stats`)
   → lights on/off differently from the same time yesterday, or a big visual
